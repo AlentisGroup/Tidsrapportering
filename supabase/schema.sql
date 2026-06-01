@@ -527,3 +527,4 @@ create policy "documents_insert_own_org" on storage.objects
         and split_part(name, '/', 1) = p.organization_id::text
     )
   );
+

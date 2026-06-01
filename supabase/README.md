@@ -68,3 +68,4 @@ Nästa steg är att koppla appen mot Supabase:
    - `projects`
    - `time_entries`
 5. Därefter kopplar vi filer, fakturor och kundportal.
+

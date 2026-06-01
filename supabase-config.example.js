@@ -8,3 +8,4 @@ window.NOVADEX_SUPABASE = {
   url: "https://DIN-PROJEKTREF.supabase.co",
   anonKey: "DIN-ANON-PUBLIC-KEY"
 };
+
