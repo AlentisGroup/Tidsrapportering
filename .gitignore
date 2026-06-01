@@ -1,0 +1,10 @@
+supabase-config.js
+Tidbyran-fristaende.html
+*.zip
+*.tmp
+pagespeed-*.html
+pagespeed-*.txt
+node_modules/
+.env
+.env.*
+!.env.example
