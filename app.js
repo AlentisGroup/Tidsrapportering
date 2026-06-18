@@ -3229,12 +3229,189 @@ function getInvoiceDetail(projectId) {
   };
 }
 
+function getInvoiceBlockedItems(detail) {
+  if (!detail) return [];
+  const blockedEntries = detail.entries
+    .filter((entry) => !isInvoiceReady(entry.status))
+    .map((entry) => ({
+      kind: "entry",
+      id: entry.id,
+      projectId: detail.project.id,
+      title: entry.task,
+      subtitle: `${entry.date} · ${entry.employee} · ${formatHours(Number(entry.hours || 0))}`,
+      value: formatSEK(Number(entry.hours || 0) * Number(detail.client?.rate || 0)),
+      status: entry.status || "draft"
+    }));
+  const blockedReceipts = detail.receipts
+    .filter((receipt) => !isInvoiceReady(receipt.status))
+    .map((receipt) => ({
+      kind: "receipt",
+      id: receipt.id,
+      projectId: detail.project.id,
+      title: `Kvitto · ${receipt.supplier}`,
+      subtitle: `${receipt.date} · ${getProject(receipt.projectId)?.name || detail.project.name}`,
+      value: formatSEK(Number(receipt.amount || 0)),
+      status: receipt.status || "draft"
+    }));
+  const blockedTravels = detail.travels
+    .filter((travel) => !isInvoiceReady(travel.status))
+    .map((travel) => ({
+      kind: "travel",
+      id: travel.id,
+      projectId: detail.project.id,
+      title: travel.type === "allowance" ? "Traktamente" : "Milersättning",
+      subtitle: `${travel.date} · ${travel.from || "-"} till ${travel.to || "-"}`,
+      value: formatSEK(getTravelValue(travel)),
+      status: travel.status || "draft"
+    }));
+  return [...blockedEntries, ...blockedReceipts, ...blockedTravels];
+}
+
+function getInvoiceRecordLines(invoice) {
+  const client = getClient(invoice.clientId);
+  const entryRows = (invoice.entryIds || []).map((id) => {
+    const entry = state.entries.find((item) => item.id === id);
+    if (!entry) return null;
+    return {
+      title: entry.task,
+      subtitle: `${entry.date} · ${entry.employee} · ${formatHours(Number(entry.hours || 0))}`,
+      value: formatSEK(Number(entry.hours || 0) * Number(client?.rate || 0))
+    };
+  });
+  const receiptRows = (invoice.receiptIds || []).map((id) => {
+    const receipt = state.receipts.find((item) => item.id === id);
+    if (!receipt) return null;
+    return {
+      title: `Kvitto · ${receipt.supplier}`,
+      subtitle: `${receipt.date} · moms ${formatSEK(Number(receipt.vat || 0))}`,
+      value: formatSEK(Number(receipt.amount || 0))
+    };
+  });
+  const travelRows = (invoice.travelIds || []).map((id) => {
+    const travel = state.travels.find((item) => item.id === id);
+    if (!travel) return null;
+    return {
+      title: travel.type === "allowance" ? "Traktamente" : "Milersättning",
+      subtitle: `${travel.date} · ${travel.from || "-"} till ${travel.to || "-"}`,
+      value: formatSEK(getTravelValue(travel))
+    };
+  });
+  return [...entryRows, ...receiptRows, ...travelRows].filter(Boolean);
+}
+
+function renderInvoiceReadyChecklist(detail, meta) {
+  const checks = [
+    { label: "Faktura-e-post", ok: Boolean(meta.billingEmail), note: meta.billingEmail || "Saknas" },
+    { label: "Attesterade rader", ok: detail.total > 0, note: formatSEK(detail.total) },
+    { label: "Bankgiro", ok: Boolean(meta.bankgiro), note: meta.bankgiro || "Saknas" },
+    { label: `Moms ${meta.vatRate}%`, ok: meta.vatRate >= 0, note: formatSEK(meta.vat) }
+  ];
+  return `
+    <div class="invoice-ready-list">
+      ${checks.map((check) => `
+        <div class="${check.ok ? "ready" : "blocked"}">
+          <span>${check.ok ? "✓" : "!"}</span>
+          <strong>${escapeHtml(check.label)}</strong>
+          <small>${escapeHtml(check.note)}</small>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderInvoiceLineRows(lines, emptyText = "Inga rader") {
+  if (!lines.length) {
+    return `<div class="empty-state compact-empty"><span>${escapeHtml(emptyText)}</span></div>`;
+  }
+  return lines.map((line) => `
+    <div class="compact-row invoice-line-row">
+      <button class="clickable-row" type="button" ${line.editKind ? `data-edit-${line.editKind}="${line.id}"` : ""}>
+        <strong>${escapeHtml(line.title)}</strong>
+        <span>${escapeHtml(line.subtitle)}</span>
+      </button>
+      <div class="invoice-line-actions">
+        <strong>${escapeHtml(line.value)}</strong>
+        ${line.status ? `<span class="badge ${getApprovalBadgeClass(line.status)}">${escapeHtml(getApprovalStatusLabel(line.status))}</span>` : ""}
+        ${line.excludeKind ? `<button class="ghost-button small-button" type="button" data-invoice-line-exclude="${line.excludeKind}" data-invoice-line-id="${line.id}" data-invoice-project-id="${line.projectId}">Ta bort</button>` : ""}
+        ${line.approveKind ? `<button class="ghost-button small-button" type="button" data-invoice-line-approve="${line.approveKind}" data-invoice-line-id="${line.id}" data-invoice-project-id="${line.projectId}">Attestera</button>` : ""}
+      </div>
+    </div>
+  `).join("");
+}
+
+function saveInvoiceDraft(projectId) {
+  const project = getProject(projectId);
+  if (!project) return false;
+  project.invoiceStatus = "draft";
+  return true;
+}
+
+function createInvoiceFromProject(projectId) {
+  const project = getProject(projectId);
+  if (!project) return null;
+  const record = createInvoiceRecord(project);
+  if (!record) return null;
+  project.invoiceStatus = "created";
+  markProjectItemsInvoiced(project);
+  return record;
+}
+
+function approveInvoiceLine(kind, id) {
+  const collections = {
+    entry: state.entries,
+    receipt: state.receipts,
+    travel: state.travels
+  };
+  const item = collections[kind]?.find((candidate) => candidate.id === id);
+  if (!item || item.status === "invoiced") return false;
+  item.status = "approved";
+  item.reviewNote = "";
+  return true;
+}
+
+function approveInvoiceBlockedItems(projectId) {
+  const detail = getInvoiceDetail(projectId);
+  if (!detail) return 0;
+  return getInvoiceBlockedItems(detail).reduce((count, item) => approveInvoiceLine(item.kind, item.id) ? count + 1 : count, 0);
+}
+
 function openInvoiceDetail(projectId) {
   const detail = getInvoiceDetail(projectId);
   if (!detail) {
     showToast("Fakturaunderlaget kunde inte öppnas.", "warning");
     return;
   }
+  const meta = getInvoiceMeta(detail);
+  const blockedItems = getInvoiceBlockedItems(detail);
+  const approvedLines = [
+    ...detail.approvedEntries.map((entry) => ({
+      id: entry.id,
+      editKind: "entry",
+      excludeKind: "entry",
+      projectId: detail.project.id,
+      title: entry.task,
+      subtitle: `${entry.date} · ${entry.employee} · ${formatHours(Number(entry.hours || 0))}`,
+      value: formatSEK(Number(entry.hours || 0) * Number(detail.client?.rate || 0))
+    })),
+    ...detail.approvedReceipts.map((receipt) => ({
+      id: receipt.id,
+      editKind: "receipt",
+      excludeKind: "receipt",
+      projectId: detail.project.id,
+      title: `Kvitto · ${receipt.supplier}`,
+      subtitle: `${receipt.date} · moms ${formatSEK(Number(receipt.vat || 0))}`,
+      value: formatSEK(Number(receipt.amount || 0))
+    })),
+    ...detail.approvedTravels.map((travel) => ({
+      id: travel.id,
+      editKind: "travel",
+      excludeKind: "travel",
+      projectId: detail.project.id,
+      title: travel.type === "allowance" ? "Traktamente" : "Milersättning",
+      subtitle: `${travel.date} · ${travel.from || "-"} till ${travel.to || "-"}`,
+      value: formatSEK(getTravelValue(travel))
+    }))
+  ];
 
   setDrawerContent({
     eyebrow: "Fakturaunderlag",
@@ -3244,11 +3421,12 @@ function openInvoiceDetail(projectId) {
         <article class="drawer-list-item">
           <div>
             <strong>${escapeHtml(detail.client?.name || "Okänd kund")}</strong>
-            <span>${escapeHtml(detail.client?.org || "Org.nr saknas")} · ${escapeHtml(detail.client?.email || "Ingen e-post")}</span>
+            <span>${escapeHtml(detail.client?.org || "Org.nr saknas")} · ${escapeHtml(meta.billingEmail || "Ingen faktura-e-post")}</span>
           </div>
           <span class="badge ${detail.project.invoiceStatus === "draft" ? "draft" : "approved"}">${detail.project.invoiceStatus === "draft" ? "Utkast" : "Preliminärt"}</span>
         </article>
       </div>
+      ${renderInvoiceReadyChecklist(detail, meta)}
       ${detail.warnings.length ? `
         <div class="info-banner warning-banner">
           ${detail.warnings.slice(0, 4).map((warning) => `<div>${escapeHtml(warning)}</div>`).join("")}
@@ -3262,41 +3440,26 @@ function openInvoiceDetail(projectId) {
         <div><span>Totalt</span><strong>${formatSEK(detail.total)}</strong></div>
         <div><span>Varningar</span><strong>${detail.warnings.length}</strong></div>
       </div>
+      <div class="invoice-meta-box">
+        <div><span>Fakturanummer</span><strong>${escapeHtml(meta.invoiceNumber)}</strong></div>
+        <div><span>Betalvillkor</span><strong>${meta.paymentTerms} dagar</strong></div>
+        <div><span>Moms</span><strong>${formatSEK(meta.vat)}</strong></div>
+        <div><span>Att betala</span><strong>${formatSEK(meta.totalInclVat)}</strong></div>
+        <div><span>Referens</span><strong>${escapeHtml(meta.invoiceReference || "Ej angiven")}</strong></div>
+        <div><span>Bankgiro</span><strong>${escapeHtml(meta.bankgiro || "Ej angivet")}</strong></div>
+      </div>
       <div class="invoice-detail-list">
-        <h3>Tidsrader</h3>
-        ${detail.approvedEntries.length ? detail.approvedEntries.map((entry) => `
-          <div class="compact-row invoice-line-row">
-            <button class="clickable-row" type="button" data-edit-entry="${entry.id}">
-              <strong>${escapeHtml(entry.task)}</strong>
-              <span>${entry.date} · ${escapeHtml(entry.employee)} · ${formatHours(Number(entry.hours || 0))} · ${formatSEK(Number(entry.hours || 0) * Number(detail.client?.rate || 0))}</span>
-            </button>
-            <button class="ghost-button small-button" type="button" data-invoice-line-exclude="entry" data-invoice-line-id="${entry.id}" data-invoice-project-id="${detail.project.id}">Ta bort från faktura</button>
-          </div>
-        `).join("") : els.emptyTemplate.innerHTML}
-        <h3>Kvitton</h3>
-        ${detail.approvedReceipts.length ? detail.approvedReceipts.map((receipt) => `
-          <div class="compact-row invoice-line-row">
-            <button class="clickable-row" type="button" data-edit-receipt="${receipt.id}">
-              <strong>${escapeHtml(receipt.supplier)}</strong>
-              <span>${receipt.date} · ${formatSEK(Number(receipt.amount || 0))}</span>
-            </button>
-            <button class="ghost-button small-button" type="button" data-invoice-line-exclude="receipt" data-invoice-line-id="${receipt.id}" data-invoice-project-id="${detail.project.id}">Ta bort från faktura</button>
-          </div>
-        `).join("") : els.emptyTemplate.innerHTML}
-        <h3>Resor</h3>
-        ${detail.approvedTravels.length ? detail.approvedTravels.map((travel) => `
-          <div class="compact-row invoice-line-row">
-            <button class="clickable-row" type="button" data-edit-travel="${travel.id}">
-              <strong>${travel.type === "allowance" ? "Traktamente" : "Milersättning"}</strong>
-              <span>${travel.date} · ${escapeHtml(travel.from || "-")} till ${escapeHtml(travel.to || "-")} · ${formatSEK(getTravelValue(travel))}</span>
-            </button>
-            <button class="ghost-button small-button" type="button" data-invoice-line-exclude="travel" data-invoice-line-id="${travel.id}" data-invoice-project-id="${detail.project.id}">Ta bort från faktura</button>
-          </div>
-        `).join("") : els.emptyTemplate.innerHTML}
+        <h3>Klara fakturarader</h3>
+        ${renderInvoiceLineRows(approvedLines, "Inga attesterade rader")}
+        <h3>Ej klara för faktura</h3>
+        ${renderInvoiceLineRows(blockedItems.map((item) => ({ ...item, approveKind: item.kind })), "Inga spärrade rader")}
       </div>
       <div class="drawer-actions">
+        <button class="ghost-button" type="button" data-edit-client="${detail.client?.id || ""}">Redigera fakturauppgifter</button>
+        <button class="ghost-button" type="button" data-invoice-draft="${detail.project.id}">Spara utkast</button>
         <button class="ghost-button" type="button" data-invoice-preview="${detail.project.id}">Förhandsgranska</button>
         <button class="ghost-button" type="button" data-invoice-download="${detail.project.id}">Ladda ner</button>
+        ${blockedItems.length ? `<button class="ghost-button" type="button" data-invoice-approve-blocked="${detail.project.id}">Snabbattestera spärrade</button>` : ""}
         <button class="primary-button" type="button" data-invoice-create="${detail.project.id}">Skapa fakturaunderlag</button>
       </div>
     `
@@ -3426,6 +3589,27 @@ function downloadInvoiceDocument(projectId) {
   link.download = `${fileName || "faktura"}.html`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadStoredInvoiceDocument(invoiceId) {
+  const invoice = (state.invoices || []).find((item) => item.id === invoiceId);
+  if (!invoice?.documentHtml) {
+    showToast("Fakturadokumentet saknas.", "warning");
+    return false;
+  }
+  const fileName = `faktura-${invoice.number}`.toLowerCase()
+    .replaceAll("å", "a")
+    .replaceAll("ä", "a")
+    .replaceAll("ö", "o")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  const url = URL.createObjectURL(new Blob([invoice.documentHtml], { type: "text/html;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${fileName || "faktura"}.html`;
+  link.click();
+  URL.revokeObjectURL(url);
+  return true;
 }
 
 function createInvoiceRecord(project) {
@@ -3563,6 +3747,8 @@ function openInvoiceRecordDetail(invoiceId) {
   const client = getClient(invoice.clientId);
   const status = getEffectiveInvoiceStatus(invoice);
   const timeline = getInvoiceTimeline(invoice);
+  const invoiceLines = getInvoiceRecordLines(invoice);
+  const isClosed = ["paid", "credited", "reopened"].includes(invoice.status);
 
   setDrawerContent({
     eyebrow: "Faktura",
@@ -3593,18 +3779,25 @@ function openInvoiceRecordDetail(invoiceId) {
       </div>
       <div class="invoice-timeline">
         ${timeline.map((item) => `
-          <div>
+          <div class="${item.active ? "active" : ""}">
             <span></span>
             <strong>${escapeHtml(item.label)}</strong>
             <em>${escapeHtml(item.date || "-")}</em>
           </div>
         `).join("")}
       </div>
+      <div class="invoice-detail-list">
+        <h3>Ingår i fakturan</h3>
+        ${renderInvoiceLineRows(invoiceLines, "Inga kopplade rader")}
+      </div>
       <div class="drawer-actions">
         <button class="ghost-button" type="button" data-open-document="invoice" data-document-id="${invoice.id}">Öppna faktura</button>
-        <button class="ghost-button" type="button" data-invoice-email="${invoice.id}" ${["paid", "credited", "reopened"].includes(invoice.status) ? "disabled" : ""}>Skicka e-post</button>
-        <button class="ghost-button" type="button" data-invoice-status="paid" data-invoice-id="${invoice.id}" ${["paid", "credited", "reopened"].includes(invoice.status) ? "disabled" : ""}>Markera betald</button>
+        <button class="ghost-button" type="button" data-invoice-stored-download="${invoice.id}">Ladda ner</button>
+        <button class="ghost-button" type="button" data-invoice-email="${invoice.id}" ${isClosed ? "disabled" : ""}>Skicka e-post</button>
+        <button class="ghost-button" type="button" data-invoice-status="sent" data-invoice-id="${invoice.id}" ${isClosed ? "disabled" : ""}>Markera skickad</button>
+        <button class="ghost-button" type="button" data-invoice-status="paid" data-invoice-id="${invoice.id}" ${["credited", "reopened"].includes(invoice.status) ? "disabled" : ""}>Markera betald</button>
         <button class="ghost-button" type="button" data-invoice-status="credited" data-invoice-id="${invoice.id}" ${["credited", "reopened"].includes(invoice.status) ? "disabled" : ""}>Kreditera</button>
+        <button class="ghost-button" type="button" data-invoice-reopen="${invoice.id}" ${isClosed ? "disabled" : ""}>Återöppna underlag</button>
       </div>
     `
   });
@@ -3732,6 +3925,9 @@ function renderInvoiceHistory() {
             </button>
             <button class="mini-button" type="button" title="Öppna faktura" aria-label="Öppna faktura" data-open-document="invoice" data-document-id="${invoice.id}">
               <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h8M8 17h4"></path></svg>
+            </button>
+            <button class="mini-button" type="button" title="Ladda ner faktura" aria-label="Ladda ner faktura" data-invoice-stored-download="${invoice.id}">
+              <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"></path></svg>
             </button>
             <button class="mini-button" type="button" title="Skicka e-post" aria-label="Skicka e-post" data-invoice-email="${invoice.id}" ${isClosed ? "disabled" : ""}>
               <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 7l8 6 8-6"></path></svg>
@@ -5392,12 +5588,8 @@ els.invoiceCommandStrip?.addEventListener("click", (event) => {
   if (command === "create-ready") {
     const rows = getInvoiceRows().filter((row) => row.total > 0 && !row.warning);
     const created = rows.reduce((count, row) => {
-      const project = state.projects.find((item) => item.id === row.id);
-      if (!project) return count;
-      const record = createInvoiceRecord(project);
+      const record = createInvoiceFromProject(row.id);
       if (!record) return count;
-      project.invoiceStatus = "created";
-      markProjectItemsInvoiced(project);
       return count + 1;
     }, 0);
     if (!created) {
@@ -5699,17 +5891,58 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const drawerInvoiceStoredDownload = event.target.closest("[data-invoice-stored-download]");
+  if (drawerInvoiceStoredDownload && els.drawer.contains(drawerInvoiceStoredDownload)) {
+    downloadStoredInvoiceDocument(drawerInvoiceStoredDownload.dataset.invoiceStoredDownload);
+    return;
+  }
+
+  const drawerInvoiceDraft = event.target.closest("[data-invoice-draft]");
+  if (drawerInvoiceDraft && els.drawer.contains(drawerInvoiceDraft)) {
+    if (saveInvoiceDraft(drawerInvoiceDraft.dataset.invoiceDraft)) {
+      saveState();
+      renderAll();
+      openInvoiceDetail(drawerInvoiceDraft.dataset.invoiceDraft);
+      showToast("Fakturaunderlaget sparades som utkast.");
+    }
+    return;
+  }
+
+  const drawerInvoiceApproveLine = event.target.closest("[data-invoice-line-approve]");
+  if (drawerInvoiceApproveLine && els.drawer.contains(drawerInvoiceApproveLine)) {
+    if (approveInvoiceLine(drawerInvoiceApproveLine.dataset.invoiceLineApprove, drawerInvoiceApproveLine.dataset.invoiceLineId)) {
+      saveState();
+      renderAll();
+      openInvoiceDetail(drawerInvoiceApproveLine.dataset.invoiceProjectId);
+      showToast("Raden attesterades och kan faktureras.");
+    }
+    return;
+  }
+
+  const drawerInvoiceApproveBlocked = event.target.closest("[data-invoice-approve-blocked]");
+  if (drawerInvoiceApproveBlocked && els.drawer.contains(drawerInvoiceApproveBlocked)) {
+    const count = approveInvoiceBlockedItems(drawerInvoiceApproveBlocked.dataset.invoiceApproveBlocked);
+    if (!count) {
+      showToast("Det finns inga spärrade fakturarader att attestera.", "warning");
+      return;
+    }
+    saveState();
+    renderAll();
+    openInvoiceDetail(drawerInvoiceApproveBlocked.dataset.invoiceApproveBlocked);
+    showToast(`${count} spärrade fakturarader attesterades.`);
+    return;
+  }
+
   const drawerInvoiceCreate = event.target.closest("[data-invoice-create]");
   if (drawerInvoiceCreate && els.drawer.contains(drawerInvoiceCreate)) {
-    const project = getProject(drawerInvoiceCreate.dataset.invoiceCreate);
-    if (project) {
-      createInvoiceRecord(project);
-      project.invoiceStatus = "created";
-      markProjectItemsInvoiced(project);
+    const record = createInvoiceFromProject(drawerInvoiceCreate.dataset.invoiceCreate);
+    if (record) {
       saveState();
-      closeDrawer();
       renderAll();
+      openInvoiceRecordDetail(record.id);
       showToast("Fakturaunderlag skapades och poster markerades som fakturerade.");
+    } else {
+      showToast("Det finns inget att fakturera på underlaget.", "warning");
     }
     return;
   }
@@ -5735,6 +5968,24 @@ document.addEventListener("click", (event) => {
       openInvoiceRecordDetail(drawerInvoiceStatus.dataset.invoiceId);
       showToast(`Fakturan markerades som ${getInvoiceStatusLabel(status).toLowerCase()}.`);
     }
+    return;
+  }
+
+  const drawerInvoiceReopen = event.target.closest("[data-invoice-reopen]");
+  if (drawerInvoiceReopen && els.drawer.contains(drawerInvoiceReopen)) {
+    if (!window.confirm("Vill du återöppna fakturan och släppa tillbaka underlaget till fakturering?")) return;
+    if (reopenInvoice(drawerInvoiceReopen.dataset.invoiceReopen)) {
+      saveState();
+      renderAll();
+      openInvoiceRecordDetail(drawerInvoiceReopen.dataset.invoiceReopen);
+      showToast("Fakturan återöppnades och underlaget kan faktureras igen.");
+    }
+    return;
+  }
+
+  const drawerEditClient = event.target.closest("[data-edit-client]");
+  if (drawerEditClient && els.drawer.contains(drawerEditClient)) {
+    openEntityEditor("client", drawerEditClient.dataset.editClient);
     return;
   }
 
@@ -6592,20 +6843,17 @@ els.invoiceTable.addEventListener("click", (event) => {
   }
 
   if (draftButton) {
-    const project = state.projects.find((item) => item.id === draftButton.dataset.invoiceDraft);
-    if (project) {
-      project.invoiceStatus = "draft";
+    if (saveInvoiceDraft(draftButton.dataset.invoiceDraft)) {
       showToast("Projektet sparades som fakturautkast.");
     }
   }
 
   if (createButton) {
-    const project = state.projects.find((item) => item.id === createButton.dataset.invoiceCreate);
-    if (project) {
-      createInvoiceRecord(project);
-      project.invoiceStatus = "created";
-      markProjectItemsInvoiced(project);
+    const record = createInvoiceFromProject(createButton.dataset.invoiceCreate);
+    if (record) {
       showToast("Fakturaunderlag skapades och attesterade poster markerades som fakturerade.");
+    } else {
+      showToast("Det finns inget att fakturera på underlaget.", "warning");
     }
   }
 
@@ -6621,6 +6869,7 @@ els.invoiceHistoryTable?.addEventListener("click", (event) => {
   const reopenButton = event.target.closest("[data-invoice-reopen]");
   const detailButton = event.target.closest("[data-invoice-detail]");
   const emailButton = event.target.closest("[data-invoice-email]");
+  const storedDownloadButton = event.target.closest("[data-invoice-stored-download]");
 
   if (detailButton) {
     event.preventDefault();
@@ -6631,6 +6880,12 @@ els.invoiceHistoryTable?.addEventListener("click", (event) => {
   if (documentButton) {
     event.preventDefault();
     openStoredDocument(documentButton.dataset.openDocument, documentButton.dataset.documentId);
+    return;
+  }
+
+  if (storedDownloadButton) {
+    event.preventDefault();
+    downloadStoredInvoiceDocument(storedDownloadButton.dataset.invoiceStoredDownload);
     return;
   }
 

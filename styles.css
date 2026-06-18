@@ -803,6 +803,74 @@ button:disabled {
   font-size: 0.95rem;
 }
 
+.invoice-ready-list,
+.invoice-meta-box {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.invoice-ready-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.invoice-ready-list div,
+.invoice-meta-box div {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.invoice-ready-list div {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 2px 8px;
+  min-height: 58px;
+  padding: 10px;
+}
+
+.invoice-ready-list span {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-weight: 900;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.invoice-ready-list .ready span {
+  color: var(--teal-dark);
+  background: rgba(18, 124, 120, 0.14);
+}
+
+.invoice-ready-list .blocked span {
+  color: #b86016;
+  background: rgba(246, 153, 53, 0.16);
+}
+
+.invoice-ready-list small {
+  color: var(--muted);
+  grid-column: 2;
+}
+
+.invoice-meta-box {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.invoice-meta-box div {
+  display: grid;
+  gap: 4px;
+  min-height: 58px;
+  padding: 10px;
+}
+
+.invoice-meta-box span,
+.invoice-meta-box small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .document-preview {
   display: flex;
   align-items: center;
@@ -1876,6 +1944,14 @@ th {
   gap: 10px;
 }
 
+.invoice-line-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .invoice-line-row .clickable-row {
   display: grid;
   gap: 3px;
@@ -1894,6 +1970,14 @@ th {
 .clickable-row:hover {
   color: var(--purple);
   background: #fbf8ff;
+}
+
+.invoice-timeline div.active span {
+  background: var(--teal);
+}
+
+.invoice-timeline div.active strong {
+  color: var(--ink);
 }
 
 .detail-progress {
@@ -2412,8 +2496,18 @@ th {
 
   .portal-comment-form,
   .portal-upload-form,
-  .invoice-line-row {
+  .invoice-line-row,
+  .invoice-ready-list,
+  .invoice-meta-box {
     grid-template-columns: 1fr;
+  }
+
+  .invoice-ready-list small {
+    grid-column: 1;
+  }
+
+  .invoice-line-actions {
+    justify-content: flex-start;
   }
 
   .approval-actions {
