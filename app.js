@@ -537,6 +537,11 @@ const els = {
   reportTags: document.querySelector("#report-tags"),
   reportCatalog: document.querySelector("#report-catalog"),
   employeeList: document.querySelector("#employee-list"),
+  adminSummary: document.querySelector("#admin-summary"),
+  adminChecklist: document.querySelector("#admin-checklist"),
+  roleMatrix: document.querySelector("#role-matrix"),
+  adminOpenSettings: document.querySelector("#admin-open-settings"),
+  adminCreateUser: document.querySelector("#admin-create-user"),
   userList: document.querySelector("#user-list"),
   accountRequestList: document.querySelector("#account-request-list"),
   addAccountRequest: document.querySelector("#add-account-request"),
@@ -3357,8 +3362,94 @@ function renderReports() {
   }
 
   renderUserAdministration();
+  renderAdminOverview();
 
   renderApprovalFlow();
+}
+
+function renderAdminOverview() {
+  if (!els.adminSummary || !els.adminChecklist || !els.roleMatrix) return;
+  const pendingRequests = state.accountRequests.filter((request) => request.status === "pending").length;
+  const customerUsers = state.users.filter((user) => user.role === "customer").length;
+  const usersWithoutClient = state.users.filter((user) => user.role === "customer" && !user.clientId).length;
+  const openApprovals = getApprovalItems().filter((item) => matchesApprovalStatusFilter(item, "open")).length;
+  const settings = state.settings || defaultState.settings;
+  const invoiceReady = Boolean(settings.companyName && settings.adminEmail && settings.invoicePrefix && settings.bankgiro);
+  const portalReady = customerUsers > 0 && !usersWithoutClient;
+
+  if (!isAdminUser()) {
+    els.adminSummary.innerHTML = `
+      <div><span>Din roll</span><strong>${escapeHtml(roleLabels[getCurrentUser().role] || getCurrentUser().role)}</strong></div>
+      <div><span>Åtkomst</span><strong>Begränsad</strong></div>
+      <div><span>Adminläge</span><strong>Låst</strong></div>
+    `;
+    els.adminChecklist.innerHTML = `
+      <div class="admin-check-row warning"><strong>Endast admin kan ändra roller och inställningar</strong><span>Byt till adminrollen i testläget för att konfigurera systemet.</span></div>
+    `;
+  } else {
+    els.adminSummary.innerHTML = `
+      <div><span>Användare</span><strong>${state.users.length}</strong></div>
+      <div><span>Kunder med portal</span><strong>${customerUsers}</strong></div>
+      <div><span>Kontoansökningar</span><strong>${pendingRequests}</strong></div>
+      <div><span>Öppna attester</span><strong>${openApprovals}</strong></div>
+      <div><span>Fakturainställningar</span><strong>${invoiceReady ? "Klara" : "Saknas"}</strong></div>
+      <div><span>Portalstatus</span><strong>${portalReady ? "Klar" : "Kontrollera"}</strong></div>
+    `;
+
+    const checks = [
+      {
+        ok: invoiceReady,
+        title: "Fakturaprofil",
+        text: invoiceReady ? `Prefix ${settings.invoicePrefix}, bankgiro ${settings.bankgiro}` : "Fyll i företagsnamn, admin e-post, fakturaprefix och bankgiro."
+      },
+      {
+        ok: pendingRequests === 0,
+        title: "Kontoansökningar",
+        text: pendingRequests ? `${pendingRequests} ansökningar väntar på beslut.` : "Alla kontoansökningar är hanterade."
+      },
+      {
+        ok: usersWithoutClient === 0,
+        title: "Kundkoppling",
+        text: usersWithoutClient ? `${usersWithoutClient} kundkonton saknar kopplad kund.` : "Alla kundkonton är kopplade till kund."
+      },
+      {
+        ok: openApprovals === 0,
+        title: "Attestkö",
+        text: openApprovals ? `${openApprovals} underlag ligger öppna i attestflödet.` : "Inga öppna attester just nu."
+      }
+    ];
+
+    els.adminChecklist.innerHTML = checks.map((check) => `
+      <div class="admin-check-row ${check.ok ? "ok" : "warning"}">
+        <strong>${escapeHtml(check.title)}</strong>
+        <span>${escapeHtml(check.text)}</span>
+      </div>
+    `).join("");
+  }
+
+  const matrixViews = [
+    ["dashboard", "Start"],
+    ["time", "Tid"],
+    ["clients", "Kunder"],
+    ["agreements", "Avtal"],
+    ["esign", "Signering"],
+    ["invoice", "Faktura"],
+    ["portal", "Portal"],
+    ["reports", "Admin"]
+  ];
+
+  els.roleMatrix.innerHTML = `
+    <div class="role-matrix-head">
+      <span>Roll</span>
+      ${matrixViews.map(([, label]) => `<span>${escapeHtml(label)}</span>`).join("")}
+    </div>
+    ${Object.entries(roleLabels).map(([role, label]) => `
+      <div class="role-matrix-row">
+        <strong>${escapeHtml(label)}</strong>
+        ${matrixViews.map(([view]) => `<span class="${(roleAccess[role] || []).includes(view) ? "allowed" : "blocked"}">${(roleAccess[role] || []).includes(view) ? "Ja" : "-"}</span>`).join("")}
+      </div>
+    `).join("")}
+  `;
 }
 
 function renderUserAdministration() {
@@ -3382,15 +3473,22 @@ function renderUserAdministration() {
 
   if (els.addAccountRequest) els.addAccountRequest.disabled = false;
   els.userList.innerHTML = state.users.map((user) => `
-    <div class="employee-item">
+    <div class="employee-item admin-user-card">
       <div>
         <strong>${escapeHtml(user.name)}</strong>
         <span>${escapeHtml(user.email)} · ${escapeHtml(user.title || roleLabels[user.role] || user.role)}</span>
+        <small class="review-note">${user.role === "customer" ? `Kundportal: ${escapeHtml(getClient(user.clientId)?.name || "ingen kund kopplad")}` : `Åtkomst: ${(roleAccess[user.role] || []).length} moduler`}</small>
       </div>
       <div class="row-actions">
         <select class="compact-select" data-user-role="${user.id}" aria-label="Roll för ${escapeHtml(user.name)}">
           ${Object.entries(roleLabels).map(([role, label]) => `<option value="${role}" ${role === user.role ? "selected" : ""}>${label}</option>`).join("")}
         </select>
+        ${user.role === "customer" ? `
+          <select class="compact-select" data-user-client="${user.id}" aria-label="Kundkoppling för ${escapeHtml(user.name)}">
+            <option value="">Ingen kund</option>
+            ${state.clients.filter((client) => client.name !== "Intern byrå").map((client) => `<option value="${client.id}" ${client.id === user.clientId ? "selected" : ""}>${escapeHtml(client.name)}</option>`).join("")}
+          </select>
+        ` : ""}
         <button class="mini-button" type="button" title="Ta bort användare" aria-label="Ta bort användare" data-delete-user="${user.id}" ${user.id === state.currentUserId ? "disabled" : ""}>
           <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path></svg>
         </button>
@@ -3398,25 +3496,64 @@ function renderUserAdministration() {
     </div>
   `).join("");
 
-  const requests = state.accountRequests.filter((request) => request.status === "pending");
+  const requests = [...state.accountRequests].sort((a, b) => {
+    const statusWeight = { pending: 0, approved: 1, rejected: 2 };
+    return (statusWeight[a.status] ?? 3) - (statusWeight[b.status] ?? 3) || String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+  });
   if (!requests.length) {
     renderEmpty(els.accountRequestList);
     return;
   }
 
   els.accountRequestList.innerHTML = requests.map((request) => `
-    <div class="employee-item">
+    <div class="employee-item admin-request-card ${request.status}">
       <div>
-        <strong>${escapeHtml(request.name)}</strong>
+        <strong>${escapeHtml(request.name)} <span class="badge ${request.status === "approved" ? "approved" : request.status === "rejected" ? "rejected" : "submitted"}">${request.status === "approved" ? "Godkänd" : request.status === "rejected" ? "Avvisad" : "Väntar"}</span></strong>
         <span>${escapeHtml(request.email)} · ${escapeHtml(request.company || "Okänt företag")} · önskar ${escapeHtml(roleLabels[request.requestedRole] || request.requestedRole)}</span>
         ${request.note ? `<small class="review-note">${escapeHtml(request.note)}</small>` : ""}
+        ${request.approvedAt ? `<small class="review-note">Godkänd ${request.approvedAt}</small>` : ""}
+        ${request.rejectedAt ? `<small class="review-note">Avvisad ${request.rejectedAt}</small>` : ""}
       </div>
       <div class="row-actions">
-        <button class="primary-button small-button" type="button" data-approve-account="${request.id}">Godkänn</button>
-        <button class="ghost-button small-button" type="button" data-reject-account="${request.id}">Avvisa</button>
+        ${request.status === "pending" ? `
+          <button class="primary-button small-button" type="button" data-approve-account="${request.id}">Godkänn</button>
+          <button class="ghost-button small-button" type="button" data-reject-account="${request.id}">Avvisa</button>
+        ` : ""}
       </div>
     </div>
   `).join("");
+}
+
+function createManualUser() {
+  if (!isAdminUser()) return;
+  const name = window.prompt("Namn på ny användare:", "Ny medarbetare");
+  if (!name) return;
+  const email = window.prompt("E-post till användaren:", `${name.toLowerCase().replace(/\s+/g, ".")}@example.se`);
+  if (!email) return;
+  const role = window.prompt("Roll: admin, owner, employee eller customer", "employee") || "employee";
+  const normalizedRole = Object.keys(roleLabels).includes(role.trim()) ? role.trim() : "employee";
+  const user = {
+    id: makeUserId(name),
+    name: name.trim(),
+    email: email.trim(),
+    role: normalizedRole,
+    title: roleLabels[normalizedRole] || "Medarbetare",
+    clientId: ""
+  };
+
+  if (normalizedRole === "customer") {
+    user.clientId = state.clients.find((client) => client.name !== "Intern byrå")?.id || "";
+  }
+
+  if (state.users.some((item) => item.email.toLowerCase() === user.email.toLowerCase())) {
+    showToast("Det finns redan en användare med den e-posten.", "warning");
+    return;
+  }
+
+  state.users.push(user);
+  saveState();
+  renderAll();
+  showToast(`${user.name} skapades som ${roleLabels[user.role].toLowerCase()}.`);
 }
 
 function getTravelValue(travel) {
@@ -7246,14 +7383,31 @@ els.agreementClient.addEventListener("change", () => {
 });
 els.userList?.addEventListener("change", (event) => {
   const roleSelect = event.target.closest("[data-user-role]");
-  if (!roleSelect || !isAdminUser()) return;
-  const user = state.users.find((item) => item.id === roleSelect.dataset.userRole);
-  if (!user) return;
-  user.role = roleSelect.value;
-  user.title = roleLabels[user.role] || user.title;
-  saveState();
-  renderAll();
-  showToast(`Rollen för ${user.name} uppdaterades.`);
+  const clientSelect = event.target.closest("[data-user-client]");
+  if (!isAdminUser()) return;
+  if (roleSelect) {
+    const user = state.users.find((item) => item.id === roleSelect.dataset.userRole);
+    if (!user) return;
+    user.role = roleSelect.value;
+    user.title = roleLabels[user.role] || user.title;
+    if (user.role !== "customer") {
+      user.clientId = "";
+    } else if (!user.clientId) {
+      user.clientId = state.clients.find((client) => client.name !== "Intern byrå")?.id || "";
+    }
+    saveState();
+    renderAll();
+    showToast(`Rollen för ${user.name} uppdaterades.`);
+    return;
+  }
+  if (clientSelect) {
+    const user = state.users.find((item) => item.id === clientSelect.dataset.userClient);
+    if (!user) return;
+    user.clientId = clientSelect.value;
+    saveState();
+    renderAll();
+    showToast(`Kundkopplingen för ${user.name} uppdaterades.`);
+  }
 });
 els.userList?.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-delete-user]");
@@ -7321,6 +7475,8 @@ els.addAccountRequest?.addEventListener("click", () => {
   renderAll();
   showToast("Testansökan skapades.");
 });
+els.adminOpenSettings?.addEventListener("click", () => openDrawer("settings"));
+els.adminCreateUser?.addEventListener("click", createManualUser);
 els.esignSearch.addEventListener("input", renderEsignatures);
 els.esignStatusFilter.addEventListener("change", renderEsignatures);
 els.esignAgreement.addEventListener("change", () => {

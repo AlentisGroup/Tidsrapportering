@@ -2577,6 +2577,124 @@ th {
   white-space: nowrap;
 }
 
+.admin-overview-panel {
+  background:
+    linear-gradient(135deg, rgba(18, 124, 120, 0.08), transparent 46%),
+    rgba(255, 255, 255, 0.92);
+}
+
+.admin-workbench {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.admin-workbench section {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.admin-workbench h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+}
+
+.admin-checklist {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-check-row {
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+  background: #fbfbf8;
+}
+
+.admin-check-row.ok {
+  border-left-color: var(--teal);
+}
+
+.admin-check-row.warning {
+  border-left-color: var(--amber);
+}
+
+.admin-check-row span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.role-matrix {
+  display: grid;
+  gap: 1px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--line);
+}
+
+.role-matrix-head,
+.role-matrix-row {
+  display: grid;
+  grid-template-columns: 130px repeat(8, minmax(72px, 1fr));
+  gap: 1px;
+  min-width: 760px;
+}
+
+.role-matrix-head span,
+.role-matrix-row strong,
+.role-matrix-row span {
+  display: grid;
+  min-height: 38px;
+  place-items: center;
+  padding: 6px;
+  background: #fff;
+  font-size: 0.78rem;
+}
+
+.role-matrix-head span {
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.role-matrix-row strong {
+  justify-items: start;
+  padding-left: 10px;
+}
+
+.role-matrix-row .allowed {
+  color: var(--teal-dark);
+  background: rgba(18, 124, 120, 0.08);
+  font-weight: 900;
+}
+
+.role-matrix-row .blocked {
+  color: #a8a1ad;
+  background: #f7f5f2;
+}
+
+.admin-user-card,
+.admin-request-card {
+  align-items: start;
+}
+
+.admin-user-card .row-actions,
+.admin-request-card .row-actions {
+  flex-wrap: wrap;
+}
+
+.admin-request-card.approved,
+.admin-request-card.rejected {
+  opacity: 0.78;
+}
+
 .compact-empty {
   min-height: 72px;
   padding: 10px;
@@ -2611,7 +2729,8 @@ th {
   .report-layout,
   .portal-toolbar,
   .invoice-filterbar,
-  .client-action-board {
+  .client-action-board,
+  .admin-workbench {
     grid-template-columns: 1fr;
   }
 
