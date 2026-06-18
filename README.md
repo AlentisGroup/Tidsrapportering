@@ -54,6 +54,15 @@ Den kan:
 - se om Supabase SDK och config är laddade
 - logga in mot Supabase Auth
 - visa om användaren har en profilrad i `profiles`
+- skapa kontoansökan som sparas i `account_requests`
+- synka godkänd Supabase-profil till lokal roll i prototypen
 - logga ut
 
 Den lokala prototypen använder fortfarande `localStorage` för datan tills vi migrerar tabellerna stegvis.
+
+Första admin behöver skapas manuellt i Supabase efter första inloggningen:
+
+1. Skapa organisation i `organizations`.
+2. Skapa profil i `profiles` med samma `id` som användaren i `auth.users`.
+3. Sätt `role = 'admin'` och `is_active = true`.
+4. Lägg organisationens id i `organizationId` i `supabase-config.js` så nya kontoansökningar kopplas rätt.

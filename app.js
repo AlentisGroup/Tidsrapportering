@@ -719,6 +719,7 @@ function isSupabaseReady() {
 
 function getCloudStatusLabel() {
   if (!isSupabaseReady()) return "Moln: lokal";
+  if (cloudSession?.user && cloudProfile?.is_active === false) return "Moln: väntar";
   if (cloudSession?.user) return `Moln: ${cloudSession.user.email || "inloggad"}`;
   return "Moln: redo";
 }
@@ -743,6 +744,7 @@ async function refreshCloudSession() {
   }
   cloudSession = data.session;
   await loadCloudProfile();
+  syncCloudProfileToLocalUser({ silent: true });
   renderCloudStatus();
   return cloudSession;
 }
@@ -759,6 +761,44 @@ async function loadCloudProfile() {
   return cloudProfile;
 }
 
+function getSupabaseOrganizationId() {
+  return cloudProfile?.organization_id || supabaseConfig.organizationId || null;
+}
+
+function getCloudProfileStatusText() {
+  if (!cloudSession?.user) return "Ingen molnanvändare är inloggad ännu.";
+  if (!cloudProfile) return "Kontot finns, men ingen profilrad är skapad än.";
+  if (!cloudProfile.is_active) return "Profilen väntar på att admin godkänner åtkomst.";
+  return "Profilen är aktiv och kan användas i appen.";
+}
+
+function syncCloudProfileToLocalUser(options = {}) {
+  if (!cloudProfile?.email || !cloudProfile.is_active) return false;
+  const email = String(cloudProfile.email).toLowerCase();
+  const role = Object.keys(roleLabels).includes(cloudProfile.role) ? cloudProfile.role : "employee";
+  let user = state.users.find((item) => item.email.toLowerCase() === email);
+  if (!user) {
+    user = {
+      id: makeUserId(cloudProfile.full_name || cloudProfile.email),
+      name: cloudProfile.full_name || cloudProfile.email,
+      email: cloudProfile.email,
+      role,
+      title: cloudProfile.title || roleLabels[role] || "Medarbetare",
+      clientId: ""
+    };
+    state.users.push(user);
+  } else {
+    user.name = cloudProfile.full_name || user.name;
+    user.role = role;
+    user.title = cloudProfile.title || roleLabels[role] || user.title;
+  }
+  state.currentUserId = user.id;
+  saveState();
+  if (!options.silent) showToast(`Molnprofilen är aktiv: ${user.name}.`);
+  renderAll();
+  return true;
+}
+
 async function cloudSignIn(email, password) {
   if (!isSupabaseReady()) {
     showToast("Supabase är inte laddat. Kontrollera internet/CDN och configfilen.", "warning");
@@ -771,8 +811,74 @@ async function cloudSignIn(email, password) {
   }
   cloudSession = data.session;
   await loadCloudProfile();
+  const synced = syncCloudProfileToLocalUser({ silent: true });
   renderCloudStatus();
-  showToast("Du är inloggad mot Supabase.");
+  if (!cloudProfile) {
+    showToast("Du är inloggad, men admin behöver skapa eller koppla din profil i Supabase.", "warning");
+  } else if (!cloudProfile.is_active) {
+    showToast("Kontot väntar på admin-godkännande innan rollen aktiveras.", "warning");
+  } else {
+    showToast(synced ? "Du är inloggad och din roll är synkad." : "Du är inloggad mot Supabase.");
+  }
+  return true;
+}
+
+async function cloudRegisterAccount(formData) {
+  if (!isSupabaseReady()) {
+    showToast("Supabase är inte laddat. Kontrollera config och internetanslutning.", "warning");
+    return false;
+  }
+  const fullName = String(formData.get("fullName") || "").trim();
+  const email = String(formData.get("email") || "").trim().toLowerCase();
+  const password = String(formData.get("password") || "");
+  const requestedRole = String(formData.get("requestedRole") || "employee");
+  const company = String(formData.get("company") || "").trim();
+  const note = String(formData.get("note") || "").trim();
+  if (!fullName || !email || !password) {
+    showToast("Fyll i namn, e-post och lösenord för att skapa konto.", "warning");
+    return false;
+  }
+
+  const { data, error } = await supabaseClient.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        full_name: fullName,
+        requested_role: requestedRole,
+        company
+      }
+    }
+  });
+  if (error) {
+    showToast(`Kontot kunde inte skapas: ${error.message}`, "warning");
+    return false;
+  }
+
+  const requestPayload = {
+    organization_id: getSupabaseOrganizationId(),
+    full_name: fullName,
+    email,
+    requested_role: requestedRole,
+    company,
+    note,
+    status: "pending"
+  };
+  if (!requestPayload.organization_id) delete requestPayload.organization_id;
+  const { error: requestError } = await supabaseClient
+    .from("account_requests")
+    .insert(requestPayload);
+
+  if (data.session) {
+    cloudSession = data.session;
+    await loadCloudProfile();
+  }
+  renderCloudStatus();
+  if (requestError) {
+    showToast(`Kontot skapades, men ansökan kunde inte sparas: ${requestError.message}`, "warning");
+    return true;
+  }
+  showToast("Kontot är skapat. Admin behöver godkänna åtkomsten innan rollen aktiveras.");
   return true;
 }
 
@@ -4805,6 +4911,23 @@ function getDrawerContent(kind) {
             <label>Lösenord<input name="password" type="password" placeholder="lösenord" required></label>
             <button class="primary-button" type="submit" ${configured ? "" : "disabled"}>Logga in mot Supabase</button>
           </form>
+          <form class="drawer-form cloud-register-form" id="cloud-register-form">
+            <div class="form-intro">
+              <strong>Skapa konto</strong>
+              <span>Kontot hamnar som väntande tills admin godkänner åtkomsten.</span>
+            </div>
+            <label>Namn<input name="fullName" type="text" placeholder="För- och efternamn" required></label>
+            <label>E-post<input name="email" type="email" placeholder="namn@foretag.se" required></label>
+            <label>Lösenord<input name="password" type="password" minlength="8" placeholder="minst 8 tecken" required></label>
+            <label>Önskad roll
+              <select name="requestedRole">
+                ${Object.entries(roleLabels).map(([role, label]) => `<option value="${role}" ${role === "employee" ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+              </select>
+            </label>
+            <label>Företag<input name="company" type="text" placeholder="Företag eller kundnamn"></label>
+            <label>Meddelande<textarea name="note" rows="3" placeholder="Exempel: Jag arbetar med löner hos kunden."></textarea></label>
+            <button class="primary-button" type="submit" ${configured ? "" : "disabled"}>Skicka kontoansökan</button>
+          </form>
         `}
         <div class="info-banner warning-banner">
           Lokal data flyttas inte automatiskt än. Nästa steg är en kontrollerad migrering från localStorage till Supabase-tabellerna.
@@ -6690,7 +6813,17 @@ document.addEventListener("submit", async (event) => {
   if (cloudLoginForm) {
     event.preventDefault();
     const data = new FormData(cloudLoginForm);
-    if (await cloudSignIn(data.get("email").trim(), data.get("password"))) {
+    if (await cloudSignIn(String(data.get("email") || "").trim(), String(data.get("password") || ""))) {
+      openDrawer("cloud");
+    }
+    return;
+  }
+
+  const cloudRegisterForm = event.target.closest("#cloud-register-form");
+  if (cloudRegisterForm) {
+    event.preventDefault();
+    const data = new FormData(cloudRegisterForm);
+    if (await cloudRegisterAccount(data)) {
       openDrawer("cloud");
     }
     return;
