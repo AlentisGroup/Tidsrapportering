@@ -302,6 +302,9 @@ let newsLikes = 0;
 let newsComments = 0;
 let selectedClientId = state.clients[0]?.id || "";
 let selectedProjectId = state.projects[0]?.id || "";
+let selectedTimePeriodMode = "day";
+let selectedTimeAnchorDate = isoToday;
+let selectedTimeEmployee = "";
 
 const viewTitles = {
   dashboard: "Start",
@@ -1445,6 +1448,45 @@ function isThisWeek(dateString) {
   return date >= getWeekStart();
 }
 
+function isSameISODate(left, right) {
+  return String(left || "") === String(right || "");
+}
+
+function isSameISOWeek(dateString, anchorDate = selectedTimeAnchorDate) {
+  const date = new Date(`${dateString}T12:00:00`);
+  const start = getWeekStart(new Date(`${anchorDate}T12:00:00`));
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return date >= start && date <= end;
+}
+
+function isSameISOMonth(dateString, anchorDate = selectedTimeAnchorDate) {
+  const date = new Date(`${dateString}T12:00:00`);
+  const anchor = new Date(`${anchorDate}T12:00:00`);
+  return date.getFullYear() === anchor.getFullYear() && date.getMonth() === anchor.getMonth();
+}
+
+function isInSelectedTimePeriod(dateString) {
+  if (selectedTimePeriodMode === "week") return isSameISOWeek(dateString);
+  if (selectedTimePeriodMode === "month") return isSameISOMonth(dateString);
+  return isSameISODate(dateString, selectedTimeAnchorDate);
+}
+
+function getTimePeriodLabel() {
+  if (selectedTimePeriodMode === "week") {
+    const start = getWeekStart(new Date(`${selectedTimeAnchorDate}T12:00:00`));
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return `${toISODate(start)} - ${toISODate(end)}`;
+  }
+  if (selectedTimePeriodMode === "month") {
+    const date = new Date(`${selectedTimeAnchorDate}T12:00:00`);
+    return new Intl.DateTimeFormat("sv-SE", { month: "long", year: "numeric" }).format(date);
+  }
+  return selectedTimeAnchorDate;
+}
+
 function groupBy(items, getKey) {
   return items.reduce((acc, item) => {
     const key = getKey(item);
@@ -1881,6 +1923,8 @@ function renderEntriesTable() {
   const statusFilter = els.filterStatus.value;
   const entries = state.entries
     .filter(isEntryVisible)
+    .filter((entry) => isInSelectedTimePeriod(entry.date))
+    .filter((entry) => !selectedTimeEmployee || (entry.employee || getCurrentUser().name) === selectedTimeEmployee)
     .filter((entry) => clientFilter === "all" || entry.clientId === clientFilter)
     .filter((entry) => statusFilter === "all" || entry.status === statusFilter)
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -3467,9 +3511,13 @@ function renderAnalysis() {
 
 function renderTimePeriodOverview() {
   if (!els.timePeriodSummary || !els.timePeriodBoard) return;
-  const entries = state.entries.filter(isEntryVisible);
-  const receipts = state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId) || {}));
-  const travels = state.travels.filter((travel) => isClientVisible(getClient(travel.clientId) || {}));
+  const entries = state.entries.filter(isEntryVisible).filter((entry) => isInSelectedTimePeriod(entry.date));
+  const receipts = state.receipts
+    .filter((receipt) => isClientVisible(getClient(receipt.clientId) || {}))
+    .filter((receipt) => isInSelectedTimePeriod(receipt.date));
+  const travels = state.travels
+    .filter((travel) => isClientVisible(getClient(travel.clientId) || {}))
+    .filter((travel) => isInSelectedTimePeriod(travel.date));
   const employees = [...new Set([
     ...entries.map((entry) => entry.employee || getCurrentUser().name),
     ...state.users.filter((user) => user.role !== "customer").map((user) => user.name)
@@ -3504,6 +3552,7 @@ function renderTimePeriodOverview() {
   const waitingCount = rows.reduce((sum, row) => sum + row.submitted, 0);
 
   els.timePeriodSummary.innerHTML = `
+    <div><span>Period</span><strong>${escapeHtml(getTimePeriodLabel())}</strong></div>
     <div><span>Rapporterat</span><strong>${formatHours(totalReported)}</strong></div>
     <div><span>Schemalagt</span><strong>${formatHours(totalScheduled)}</strong></div>
     <div><span>Avvikelse</span><strong>${formatHours(totalReported - totalScheduled)}</strong></div>
@@ -3537,7 +3586,7 @@ function renderTimePeriodOverview() {
 function renderInvoiceCommandStrip() {
   if (!els.invoiceCommandStrip) return;
   const rows = getInvoiceRows();
-  const readyRows = rows.filter((row) => row.total > 0 && !row.warning && state.projects.some((project) => project.id === row.id));
+  const readyRows = rows.filter((row) => row.total > 0 && !row.warning);
   const warningRows = rows.filter((row) => row.warning > 0);
   const draftRows = state.projects.filter((project) => project.invoiceStatus === "draft");
   const invoiceTotal = rows.reduce((sum, row) => sum + row.total, 0);
@@ -4141,6 +4190,7 @@ function groupInvoiceRows(rows) {
       acc[key] = {
         ...row,
         id: key,
+        sourceProjectIds: [row.id],
         project: { name: mode === "client" ? `Alla projekt för ${row.client?.name || "okänd kund"}` : "Samlingsprojekt" },
         fixedPrice: 0,
         hours: 0,
@@ -4152,6 +4202,8 @@ function groupInvoiceRows(rows) {
         total: 0,
         warning: 0
       };
+    } else {
+      acc[key].sourceProjectIds.push(row.id);
     }
 
     acc[key].fixedPrice += row.fixedPrice;
@@ -5484,7 +5536,7 @@ function updateNewsTab(tab) {
     draft: {
       title: latestPost?.title || "Nytt inlägg",
       body: latestPost ? `<strong>${escapeHtml(latestPost.category)}:</strong> ${escapeHtml(latestPost.body)}` : "<strong>Utkast:</strong> skriv en intern nyhet, rutin eller instruktion till teamet.",
-      extra: latestPost ? `Sparat ${latestPost.date} av ${latestPost.author}.` : "Skapa ett inlägg via knappen Nytt inlägg."
+      extra: latestPost ? `Sparat ${latestPost.date} av ${latestPost.author}.${latestPost.comments?.length ? ` Kommentarer: ${latestPost.comments.map((comment) => `${comment.author}: ${comment.body}`).join(" · ")}` : ""}` : "Skapa ett inlägg via knappen Nytt inlägg."
     }
   }[tab];
 
@@ -5496,7 +5548,8 @@ function updateNewsTab(tab) {
 
 function updateNewsReactions() {
   if (els.newsReactions) {
-    els.newsReactions.textContent = `${newsLikes} gillar · ${newsComments} kommentarer`;
+    const savedComments = state.newsPosts.reduce((sum, post) => sum + (post.comments?.length || 0), 0);
+    els.newsReactions.textContent = `${newsLikes} gillar · ${newsComments + savedComments} kommentarer`;
   }
 }
 
@@ -6106,6 +6159,16 @@ function openModule(moduleName, button) {
   button.classList.add("active");
   els.pageTitle.textContent = button.textContent.trim();
   showToast(`${button.textContent.trim()} är kopplad till närmaste färdiga vy i prototypen.`);
+}
+
+function setTimePeriodMode(mode, anchorDate = selectedTimeAnchorDate) {
+  selectedTimePeriodMode = mode || "day";
+  selectedTimeAnchorDate = anchorDate || isoToday;
+  els.periodModes?.forEach((button) => {
+    button.classList.toggle("active", button.dataset.periodMode === selectedTimePeriodMode);
+  });
+  renderTimePeriodOverview();
+  renderEntriesTable();
 }
 
 async function addEntry(entry) {
@@ -6759,9 +6822,13 @@ els.timePeriodBoard?.addEventListener("click", async (event) => {
   }
 
   if (employeeButton) {
-    els.entryEmployee.value = employeeButton.dataset.timeEmployee;
+    const employee = employeeButton.dataset.timeEmployee;
+    selectedTimeEmployee = selectedTimeEmployee === employee ? "" : employee;
+    els.entryEmployee.value = employee;
+    renderTimePeriodOverview();
+    renderEntriesTable();
     els.entriesTable?.scrollIntoView({ behavior: "smooth", block: "start" });
-    showToast(`Tidtabellen filtreras visuellt via medarbetaren ${employeeButton.dataset.timeEmployee} i nästa byggsteg.`);
+    showToast(selectedTimeEmployee ? `Tidtabellen visar ${employee}.` : "Medarbetarfiltret rensades.");
   }
 });
 
@@ -6797,7 +6864,11 @@ els.invoiceCommandStrip?.addEventListener("click", (event) => {
   }
 
   if (command === "warnings") {
+    if (els.approvalKindFilter) els.approvalKindFilter.value = "all";
+    if (els.approvalStatusFilter) els.approvalStatusFilter.value = "open";
+    if (els.approvalSearch) els.approvalSearch.value = "";
     setView("reports");
+    renderApprovalFlow();
     showToast("Öppnade attestflödet så att spärrade fakturarader kan åtgärdas.");
     return;
   }
@@ -6812,10 +6883,10 @@ els.invoiceCommandStrip?.addEventListener("click", (event) => {
 
   if (command === "create-ready") {
     const rows = getInvoiceRows().filter((row) => row.total > 0 && !row.warning);
-    const created = rows.reduce((count, row) => {
-      const record = createInvoiceFromProject(row.id);
-      if (!record) return count;
-      return count + 1;
+    const projectIds = [...new Set(rows.flatMap((row) => row.sourceProjectIds || [row.id]))];
+    const created = projectIds.reduce((count, projectId) => {
+      const record = createInvoiceFromProject(projectId);
+      return record ? count + 1 : count;
     }, 0);
     if (!created) {
       showToast("Det finns inga helt klara underlag att skapa just nu.", "warning");
@@ -6872,7 +6943,8 @@ els.globalSearch?.addEventListener("keydown", (event) => {
 
 els.trialLink?.addEventListener("click", (event) => {
   event.preventDefault();
-  showToast("Testläget är aktivt lokalt. Nästa steg är riktig inloggning och roller.");
+  openDrawer("cloud");
+  showToast("Öppnade konto och molninloggning.");
 });
 
 els.topActions.forEach((button) => {
@@ -6910,6 +6982,7 @@ els.calendarGrid?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-calendar-date]");
   if (!button) return;
   els.entryDate.value = button.dataset.calendarDate;
+  setTimePeriodMode("day", button.dataset.calendarDate);
   setView("time");
   showToast(`Datum valt: ${button.dataset.calendarDate}.`);
 });
@@ -7286,9 +7359,30 @@ document.addEventListener("click", (event) => {
   }
 
   if (action === "comment-news") {
-    newsComments += 1;
+    const body = window.prompt("Skriv en kommentar:", "Jag har läst.");
+    if (!body) return;
+    if (!state.newsPosts.length) {
+      state.newsPosts.unshift({
+        id: makeId(),
+        title: els.newsTitle?.textContent || "Nyhet",
+        body: els.newsBody?.textContent || "Kommentar från startsidan.",
+        category: "Kommentar",
+        author: "System",
+        date: isoToday,
+        comments: []
+      });
+    }
+    state.newsPosts[0].comments = state.newsPosts[0].comments || [];
+    state.newsPosts[0].comments.push({
+      id: makeId(),
+      author: getCurrentUser().name,
+      body: body.trim(),
+      date: isoToday
+    });
+    saveState();
     updateNewsReactions();
-    showToast("Kommentar räknad. Riktig kommentarsruta kräver användarinloggning.");
+    updateNewsTab("draft");
+    showToast("Kommentaren sparades på nyheten.");
   }
 });
 
@@ -8017,9 +8111,8 @@ els.quickCards.forEach((button) => {
 
 els.periodModes.forEach((button) => {
   button.addEventListener("click", () => {
-    els.periodModes.forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    showToast(`Visningsläge: ${button.textContent.trim()}.`);
+    setTimePeriodMode(button.dataset.periodMode, els.entryDate.value || selectedTimeAnchorDate);
+    showToast(`Visningsläge: ${button.textContent.trim()} (${getTimePeriodLabel()}).`);
   });
 });
 
