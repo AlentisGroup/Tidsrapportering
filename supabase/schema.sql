@@ -338,6 +338,126 @@ as $$
   )
 $$;
 
+create or replace function public.approve_account_request(target_request_id uuid)
+returns public.profiles
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  request_row public.account_requests;
+  target_user_id uuid;
+  admin_org_id uuid;
+  activated_profile public.profiles;
+begin
+  if not public.is_admin_or_owner() then
+    raise exception 'Only active admins and owners can approve account requests' using errcode = '42501';
+  end if;
+
+  admin_org_id := public.current_org_id();
+
+  select *
+  into request_row
+  from public.account_requests
+  where id = target_request_id
+    and organization_id = admin_org_id
+  for update;
+
+  if not found then
+    raise exception 'Account request was not found for this organization' using errcode = 'P0002';
+  end if;
+
+  select id
+  into target_user_id
+  from auth.users
+  where lower(email) = lower(request_row.email)
+  order by created_at desc
+  limit 1;
+
+  if target_user_id is null then
+    raise exception 'No Supabase Auth user exists for %', request_row.email using errcode = 'P0002';
+  end if;
+
+  insert into public.profiles (
+    id,
+    organization_id,
+    full_name,
+    email,
+    role,
+    title,
+    is_active
+  )
+  values (
+    target_user_id,
+    admin_org_id,
+    request_row.full_name,
+    request_row.email,
+    request_row.requested_role,
+    case request_row.requested_role
+      when 'admin' then 'Admin'
+      when 'owner' then 'Kundansvarig'
+      when 'customer' then 'Kund'
+      else 'Medarbetare'
+    end,
+    true
+  )
+  on conflict (id) do update set
+    organization_id = excluded.organization_id,
+    full_name = excluded.full_name,
+    email = excluded.email,
+    role = excluded.role,
+    title = excluded.title,
+    is_active = true
+  returning * into activated_profile;
+
+  update public.account_requests
+  set status = 'approved',
+      approved_by = auth.uid(),
+      approved_at = now(),
+      rejected_at = null,
+      organization_id = admin_org_id
+  where id = target_request_id;
+
+  return activated_profile;
+end;
+$$;
+
+create or replace function public.reject_account_request(target_request_id uuid)
+returns public.account_requests
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  admin_org_id uuid;
+  rejected_request public.account_requests;
+begin
+  if not public.is_admin_or_owner() then
+    raise exception 'Only active admins and owners can reject account requests' using errcode = '42501';
+  end if;
+
+  admin_org_id := public.current_org_id();
+
+  update public.account_requests
+  set status = 'rejected',
+      rejected_at = now(),
+      approved_at = null,
+      approved_by = null
+  where id = target_request_id
+    and organization_id = admin_org_id
+  returning * into rejected_request;
+
+  if not found then
+    raise exception 'Account request was not found for this organization' using errcode = 'P0002';
+  end if;
+
+  return rejected_request;
+end;
+$$;
+
+grant execute on function public.approve_account_request(uuid) to authenticated;
+grant execute on function public.reject_account_request(uuid) to authenticated;
+
 alter table public.organizations enable row level security;
 alter table public.profiles enable row level security;
 alter table public.account_requests enable row level security;
@@ -527,4 +647,3 @@ create policy "documents_insert_own_org" on storage.objects
         and split_part(name, '/', 1) = p.organization_id::text
     )
   );
-

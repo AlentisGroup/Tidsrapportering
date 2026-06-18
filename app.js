@@ -5,6 +5,7 @@ const supabaseClient = globalThis.supabase?.createClient && supabaseConfig.url &
   : null;
 let cloudSession = null;
 let cloudProfile = null;
+let cloudAccountRequests = [];
 
 function makeId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -745,6 +746,8 @@ async function refreshCloudSession() {
   cloudSession = data.session;
   await loadCloudProfile();
   syncCloudProfileToLocalUser({ silent: true });
+  await loadCloudAccountRequests();
+  if (canManageCloudAccounts()) renderAll();
   renderCloudStatus();
   return cloudSession;
 }
@@ -765,6 +768,15 @@ function getSupabaseOrganizationId() {
   return cloudProfile?.organization_id || supabaseConfig.organizationId || null;
 }
 
+function canManageCloudAccounts() {
+  return Boolean(
+    isSupabaseReady()
+    && cloudSession?.user
+    && cloudProfile?.is_active
+    && ["admin", "owner"].includes(cloudProfile.role)
+  );
+}
+
 function getCloudProfileStatusText() {
   if (!cloudSession?.user) return "Ingen molnanvändare är inloggad ännu.";
   if (!cloudProfile) return "Kontot finns, men ingen profilrad är skapad än.";
@@ -772,30 +784,105 @@ function getCloudProfileStatusText() {
   return "Profilen är aktiv och kan användas i appen.";
 }
 
-function syncCloudProfileToLocalUser(options = {}) {
-  if (!cloudProfile?.email || !cloudProfile.is_active) return false;
-  const email = String(cloudProfile.email).toLowerCase();
-  const role = Object.keys(roleLabels).includes(cloudProfile.role) ? cloudProfile.role : "employee";
+function upsertLocalUserFromCloudProfile(profile, options = {}) {
+  if (!profile?.email || profile.is_active === false) return null;
+  const email = String(profile.email).toLowerCase();
+  const role = Object.keys(roleLabels).includes(profile.role) ? profile.role : "employee";
   let user = state.users.find((item) => item.email.toLowerCase() === email);
   if (!user) {
     user = {
-      id: makeUserId(cloudProfile.full_name || cloudProfile.email),
-      name: cloudProfile.full_name || cloudProfile.email,
-      email: cloudProfile.email,
+      id: makeUserId(profile.full_name || profile.email),
+      name: profile.full_name || profile.email,
+      email: profile.email,
       role,
-      title: cloudProfile.title || roleLabels[role] || "Medarbetare",
+      title: profile.title || roleLabels[role] || "Medarbetare",
       clientId: ""
     };
     state.users.push(user);
   } else {
-    user.name = cloudProfile.full_name || user.name;
+    user.name = profile.full_name || user.name;
     user.role = role;
-    user.title = cloudProfile.title || roleLabels[role] || user.title;
+    user.title = profile.title || roleLabels[role] || user.title;
   }
-  state.currentUserId = user.id;
+  if (options.makeCurrent !== false) state.currentUserId = user.id;
   saveState();
   if (!options.silent) showToast(`Molnprofilen är aktiv: ${user.name}.`);
   renderAll();
+  return user;
+}
+
+function syncCloudProfileToLocalUser(options = {}) {
+  return Boolean(upsertLocalUserFromCloudProfile(cloudProfile, options));
+}
+
+function normalizeCloudAccountRequest(row) {
+  return {
+    id: `cloud-${row.id}`,
+    cloudId: row.id,
+    source: "cloud",
+    name: row.full_name,
+    email: row.email,
+    requestedRole: row.requested_role || "employee",
+    company: row.company || "",
+    status: row.status || "pending",
+    createdAt: row.created_at ? row.created_at.slice(0, 10) : "",
+    approvedAt: row.approved_at ? row.approved_at.slice(0, 10) : "",
+    rejectedAt: row.rejected_at ? row.rejected_at.slice(0, 10) : "",
+    note: row.note ? `Supabase: ${row.note}` : "Supabase-ansökan"
+  };
+}
+
+async function loadCloudAccountRequests() {
+  cloudAccountRequests = [];
+  if (!canManageCloudAccounts()) return [];
+  const { data, error } = await supabaseClient
+    .from("account_requests")
+    .select("id, full_name, email, requested_role, company, note, status, approved_at, rejected_at, created_at")
+    .order("created_at", { ascending: false });
+  if (error) {
+    showToast(`Kunde inte läsa molnansökningar: ${error.message}`, "warning");
+    return [];
+  }
+  cloudAccountRequests = (data || []).map(normalizeCloudAccountRequest);
+  return cloudAccountRequests;
+}
+
+async function cloudApproveAccountRequest(requestId) {
+  if (!canManageCloudAccounts()) {
+    showToast("Logga in som aktiv admin i Supabase för att godkänna molnkonton.", "warning");
+    return false;
+  }
+  const { data, error } = await supabaseClient.rpc("approve_account_request", {
+    target_request_id: requestId
+  });
+  if (error) {
+    showToast(`Molnansökan kunde inte godkännas: ${error.message}`, "warning");
+    return false;
+  }
+  const profile = Array.isArray(data) ? data[0] : data;
+  if (profile) upsertLocalUserFromCloudProfile(profile, { makeCurrent: false, silent: true });
+  await loadCloudAccountRequests();
+  saveState();
+  renderAll();
+  showToast("Molnansökan godkändes och profilen aktiverades.");
+  return true;
+}
+
+async function cloudRejectAccountRequest(requestId) {
+  if (!canManageCloudAccounts()) {
+    showToast("Logga in som aktiv admin i Supabase för att avvisa molnkonton.", "warning");
+    return false;
+  }
+  const { error } = await supabaseClient.rpc("reject_account_request", {
+    target_request_id: requestId
+  });
+  if (error) {
+    showToast(`Molnansökan kunde inte avvisas: ${error.message}`, "warning");
+    return false;
+  }
+  await loadCloudAccountRequests();
+  renderAll();
+  showToast("Molnansökan avvisades.");
   return true;
 }
 
@@ -812,6 +899,8 @@ async function cloudSignIn(email, password) {
   cloudSession = data.session;
   await loadCloudProfile();
   const synced = syncCloudProfileToLocalUser({ silent: true });
+  await loadCloudAccountRequests();
+  if (canManageCloudAccounts()) renderAll();
   renderCloudStatus();
   if (!cloudProfile) {
     showToast("Du är inloggad, men admin behöver skapa eller koppla din profil i Supabase.", "warning");
@@ -887,6 +976,7 @@ async function cloudSignOut() {
   await supabaseClient.auth.signOut();
   cloudSession = null;
   cloudProfile = null;
+  cloudAccountRequests = [];
   renderCloudStatus();
   showToast("Du är utloggad från Supabase.");
 }
@@ -3475,7 +3565,7 @@ function renderReports() {
 
 function renderAdminOverview() {
   if (!els.adminSummary || !els.adminChecklist || !els.roleMatrix) return;
-  const pendingRequests = state.accountRequests.filter((request) => request.status === "pending").length;
+  const pendingRequests = [...state.accountRequests, ...cloudAccountRequests].filter((request) => request.status === "pending").length;
   const customerUsers = state.users.filter((user) => user.role === "customer").length;
   const usersWithoutClient = state.users.filter((user) => user.role === "customer" && !user.clientId).length;
   const openApprovals = getApprovalItems().filter((item) => matchesApprovalStatusFilter(item, "open")).length;
@@ -3602,7 +3692,7 @@ function renderUserAdministration() {
     </div>
   `).join("");
 
-  const requests = [...state.accountRequests].sort((a, b) => {
+  const requests = [...cloudAccountRequests, ...state.accountRequests].sort((a, b) => {
     const statusWeight = { pending: 0, approved: 1, rejected: 2 };
     return (statusWeight[a.status] ?? 3) - (statusWeight[b.status] ?? 3) || String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
   });
@@ -7558,6 +7648,11 @@ els.accountRequestList?.addEventListener("click", (event) => {
   const approveButton = event.target.closest("[data-approve-account]");
   const rejectButton = event.target.closest("[data-reject-account]");
   if (approveButton) {
+    const approveId = approveButton.dataset.approveAccount;
+    if (approveId?.startsWith("cloud-")) {
+      cloudApproveAccountRequest(approveId.replace("cloud-", ""));
+      return;
+    }
     const request = state.accountRequests.find((item) => item.id === approveButton.dataset.approveAccount);
     if (!request) return;
     const user = {
@@ -7582,6 +7677,11 @@ els.accountRequestList?.addEventListener("click", (event) => {
     return;
   }
   if (rejectButton) {
+    const rejectId = rejectButton.dataset.rejectAccount;
+    if (rejectId?.startsWith("cloud-")) {
+      cloudRejectAccountRequest(rejectId.replace("cloud-", ""));
+      return;
+    }
     const request = state.accountRequests.find((item) => item.id === rejectButton.dataset.rejectAccount);
     if (!request) return;
     request.status = "rejected";

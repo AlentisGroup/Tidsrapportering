@@ -56,6 +56,7 @@ Den kan:
 - visa om användaren har en profilrad i `profiles`
 - skapa kontoansökan som sparas i `account_requests`
 - synka godkänd Supabase-profil till lokal roll i prototypen
+- låta aktiv admin godkänna eller avvisa kontoansökningar via SQL-funktionerna `approve_account_request` och `reject_account_request`
 - logga ut
 
 Den lokala prototypen använder fortfarande `localStorage` för datan tills vi migrerar tabellerna stegvis.
