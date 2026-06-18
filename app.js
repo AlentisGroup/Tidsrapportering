@@ -1039,6 +1039,14 @@ function getInvoiceTimeline(invoice) {
   ].filter((item) => item.active);
 }
 
+function getDaysUntil(dateString) {
+  if (!dateString) return null;
+  const target = new Date(`${dateString}T00:00:00`);
+  if (Number.isNaN(target.getTime())) return null;
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.ceil((target - start) / 86400000);
+}
+
 function getClientSnapshot(clientId) {
   const client = getClient(clientId);
   const entries = state.entries.filter((entry) => entry.clientId === clientId);
@@ -1046,7 +1054,9 @@ function getClientSnapshot(clientId) {
   const receipts = state.receipts.filter((receipt) => receipt.clientId === clientId);
   const travels = state.travels.filter((travel) => travel.clientId === clientId);
   const agreements = state.agreements.filter((agreement) => agreement.clientId === clientId);
+  const esignatures = state.esignatures.filter((signature) => signature.clientId === clientId);
   const invoices = (state.invoices || []).filter((invoice) => invoice.clientId === clientId);
+  const portalTasks = (state.portalTasks || []).filter((task) => task.clientId === clientId);
   const approvedBillableEntries = entries.filter((entry) => entry.billable && isInvoiceReady(entry.status));
   const draftItems = [
     ...entries.filter((entry) => isApprovalOpen(entry.status)),
@@ -1073,7 +1083,9 @@ function getClientSnapshot(clientId) {
     receipts,
     travels,
     agreements,
+    esignatures,
     invoices,
+    portalTasks,
     billableHours,
     draftHours,
     draftItems,
@@ -1082,6 +1094,81 @@ function getClientSnapshot(clientId) {
     fixedPrice,
     invoiceValue
   };
+}
+
+function getClientNextActions(snapshot) {
+  const waitingApproval = snapshot.draftItems.filter((item) => item.status === "submitted").length;
+  const openPortalTasks = snapshot.portalTasks.filter((task) => task.status !== "done").length;
+  const pendingSignatures = snapshot.esignatures.filter((signature) => signature.status !== "signed").length;
+  const watchedAgreements = snapshot.agreements
+    .filter((agreement) => agreement.status !== "signed" && agreement.status !== "archived")
+    .map((agreement) => ({ ...agreement, days: getDaysUntil(agreement.watchDate) }))
+    .filter((agreement) => agreement.days !== null && agreement.days <= 30)
+    .sort((a, b) => a.days - b.days);
+  const actions = [];
+
+  if (waitingApproval) {
+    actions.push({
+      title: "Attestera underlag",
+      copy: `${waitingApproval} inskickade poster väntar på beslut.`,
+      cta: "Öppna attest",
+      attrs: `data-client-approval="${snapshot.client.id}"`,
+      tone: "warning"
+    });
+  }
+
+  if (snapshot.invoiceValue > 0) {
+    actions.push({
+      title: "Skapa fakturaunderlag",
+      copy: `${formatCurrency(snapshot.invoiceValue)} är redo eller nästan redo för fakturering.`,
+      cta: "Till fakturering",
+      attrs: `data-client-invoice="${snapshot.client.id}"`,
+      tone: "success"
+    });
+  }
+
+  if (watchedAgreements.length) {
+    const agreement = watchedAgreements[0];
+    actions.push({
+      title: "Följ upp avtal",
+      copy: `${agreement.title} bevakas ${agreement.watchDate}${agreement.days < 0 ? " och är passerat" : ""}.`,
+      cta: "Öppna avtal",
+      attrs: `data-edit-agreement="${agreement.id}"`,
+      tone: "info"
+    });
+  }
+
+  if (pendingSignatures) {
+    actions.push({
+      title: "Signering saknas",
+      copy: `${pendingSignatures} signeringar är fortfarande öppna.`,
+      cta: "Öppna signering",
+      attrs: `data-client-esign="${snapshot.client.id}"`,
+      tone: "info"
+    });
+  }
+
+  if (openPortalTasks) {
+    actions.push({
+      title: "Kundportal",
+      copy: `${openPortalTasks} öppna ärenden eller underlag i portalen.`,
+      cta: "Visa portal",
+      attrs: `data-client-portal="${snapshot.client.id}"`,
+      tone: "neutral"
+    });
+  }
+
+  if (!actions.length) {
+    actions.push({
+      title: "Kunden är i balans",
+      copy: "Inga akuta underlag, avtal eller fakturor kräver åtgärd just nu.",
+      cta: "Skapa uppgift",
+      attrs: `data-client-portal="${snapshot.client.id}"`,
+      tone: "success"
+    });
+  }
+
+  return actions.slice(0, 4);
 }
 
 function renderClientOptions() {
@@ -1403,6 +1490,9 @@ function renderClientDetail() {
     acc[entry.status || "draft"] = (acc[entry.status || "draft"] || 0) + 1;
     return acc;
   }, {});
+  const nextActions = getClientNextActions(snapshot);
+  const openPortalTasks = snapshot.portalTasks.filter((task) => task.status !== "done").length;
+  const pendingSignatures = snapshot.esignatures.filter((signature) => signature.status !== "signed").length;
 
   els.clientDetail.innerHTML = `
     <div class="section-heading">
@@ -1424,6 +1514,33 @@ function renderClientDetail() {
       <div><span>Att fakturera</span><strong>${formatCurrency(snapshot.invoiceValue)}</strong></div>
       <div><span>Attesterade rader</span><strong>${statusCount.approved || 0}</strong></div>
       <div><span>Öppna underlag</span><strong>${snapshot.draftItems.length}</strong></div>
+      <div><span>Portalärenden</span><strong>${openPortalTasks}</strong></div>
+      <div><span>Signeringar</span><strong>${pendingSignatures}</strong></div>
+    </div>
+    <div class="client-action-board">
+      <section class="client-next-panel">
+        <h3>Nästa steg</h3>
+        <div class="client-next-list">
+          ${nextActions.map((action) => `
+            <button class="client-next-card ${action.tone}" type="button" ${action.attrs}>
+              <span>${escapeHtml(action.title)}</span>
+              <strong>${escapeHtml(action.copy)}</strong>
+              <em>${escapeHtml(action.cta)}</em>
+            </button>
+          `).join("")}
+        </div>
+      </section>
+      <section class="client-command-panel">
+        <h3>Snabbkommandon</h3>
+        <div class="client-command-grid">
+          <button type="button" data-client-time="${client.id}"><strong>Tid</strong><span>Registrera tid</span></button>
+          <button type="button" data-client-docs="${client.id}"><strong>Underlag</strong><span>Kvitto eller resa</span></button>
+          <button type="button" data-client-agreement="${client.id}"><strong>Avtal</strong><span>Nytt kundavtal</span></button>
+          <button type="button" data-client-esign="${client.id}"><strong>Signering</strong><span>Skicka dokument</span></button>
+          <button type="button" data-client-portal="${client.id}"><strong>Portal</strong><span>Ärenden och filer</span></button>
+          <button type="button" data-client-invoice="${client.id}"><strong>Faktura</strong><span>${formatCurrency(snapshot.invoiceValue)}</span></button>
+        </div>
+      </section>
     </div>
     <div class="client-workflow">
       <button type="button" data-client-time="${client.id}">
@@ -4786,10 +4903,19 @@ function setAgreementTab(tab) {
 }
 
 function handleClientAction(event) {
-  const target = event.target.closest("[data-open-client], [data-client-time], [data-client-project], [data-client-docs], [data-client-invoice], [data-delete-client]");
+  const target = event.target.closest("[data-open-client], [data-client-time], [data-client-project], [data-client-docs], [data-client-agreement], [data-client-esign], [data-client-portal], [data-client-approval], [data-client-invoice], [data-delete-client]");
   if (!target) return false;
 
-  const clientId = target.dataset.openClient || target.dataset.clientTime || target.dataset.clientProject || target.dataset.clientDocs || target.dataset.clientInvoice || target.dataset.deleteClient;
+  const clientId = target.dataset.openClient
+    || target.dataset.clientTime
+    || target.dataset.clientProject
+    || target.dataset.clientDocs
+    || target.dataset.clientAgreement
+    || target.dataset.clientEsign
+    || target.dataset.clientPortal
+    || target.dataset.clientApproval
+    || target.dataset.clientInvoice
+    || target.dataset.deleteClient;
   const client = getClient(clientId);
   if (!client) return false;
 
@@ -4831,6 +4957,51 @@ function handleClientAction(event) {
     setView("time");
     focusElement(els.receiptSupplier);
     showToast(`Kvitton och underlag kopplas till ${client.name}.`);
+    return true;
+  }
+
+  if (target.matches("[data-client-agreement]")) {
+    els.agreementClient.value = clientId;
+    els.agreementEmail.value = client.billingEmail || client.email || "";
+    els.agreementProject.value = state.projects.find((project) => project.clientId === clientId)?.id || "";
+    els.agreementTitle.value = els.agreementTitle.value || `Kundavtal ${client.name}`;
+    els.agreementOwner.value = client.owner || getCurrentUser().name;
+    setAgreementTab("active");
+    setView("agreements");
+    focusElement(els.agreementTitle);
+    showToast(`Nytt avtal förbereds för ${client.name}.`);
+    return true;
+  }
+
+  if (target.matches("[data-client-esign]")) {
+    const agreement = state.agreements.find((item) => item.clientId === clientId && item.status !== "signed" && item.status !== "archived")
+      || state.agreements.find((item) => item.clientId === clientId);
+    els.esignClient.value = clientId;
+    els.esignAgreement.value = agreement?.id || "";
+    els.esignTitle.value = agreement ? `Signering av ${agreement.title}` : `Signering ${client.name}`;
+    els.esignOwner.value = agreement?.owner || client.owner || getCurrentUser().name;
+    els.esignMessage.value = agreement?.message || `Hej, här kommer dokument för signering från ${state.settings.companyName}.`;
+    setView("esign");
+    focusElement(els.esignTitle);
+    showToast(`E-signering förbereds för ${client.name}.`);
+    return true;
+  }
+
+  if (target.matches("[data-client-portal]")) {
+    if (els.portalClient) els.portalClient.value = clientId;
+    setView("portal");
+    renderPortal();
+    showToast(`Kundportalen visar ${client.name}.`);
+    return true;
+  }
+
+  if (target.matches("[data-client-approval]")) {
+    if (els.approvalSearch) els.approvalSearch.value = client.name;
+    if (els.approvalKindFilter) els.approvalKindFilter.value = "all";
+    if (els.approvalStatusFilter) els.approvalStatusFilter.value = "submitted";
+    setView("reports");
+    renderApprovalFlow();
+    showToast(`Attestflödet filtrerades på ${client.name}.`);
     return true;
   }
 
