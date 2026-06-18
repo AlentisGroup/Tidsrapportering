@@ -530,6 +530,14 @@ const els = {
   userList: document.querySelector("#user-list"),
   accountRequestList: document.querySelector("#account-request-list"),
   addAccountRequest: document.querySelector("#add-account-request"),
+  approvalSummary: document.querySelector("#approval-summary"),
+  approvalSearch: document.querySelector("#approval-search"),
+  approvalKindFilter: document.querySelector("#approval-kind-filter"),
+  approvalStatusFilter: document.querySelector("#approval-status-filter"),
+  approvalSelectAll: document.querySelector("#approval-select-all"),
+  approvalBulkSubmit: document.querySelector("#approval-bulk-submit"),
+  approvalBulkApprove: document.querySelector("#approval-bulk-approve"),
+  approvalBulkReject: document.querySelector("#approval-bulk-reject"),
   approvalList: document.querySelector("#approval-list"),
   exportCsv: document.querySelector("#export-csv"),
   drawer: document.querySelector("#app-drawer"),
@@ -1903,39 +1911,62 @@ function getEsignBadgeClass(status) {
 }
 
 function getApprovalItems({ includeApproved = false } = {}) {
-  const entryItems = state.entries.filter(isEntryVisible).map((entry) => ({
-    kind: "entry",
-    id: entry.id,
-    date: entry.date,
-    status: entry.status || "draft",
-    title: `${entry.employee} · ${getTypeLabel(entry.type)}`,
-    subtitle: `${getClient(entry.clientId)?.name || "Okänd kund"} · ${entry.task}`,
-    value: formatHours(Number(entry.hours || 0)),
-    note: entry.reviewNote || "",
-    actions: getBasisApprovalActions(entry.status || "draft")
-  }));
-  const receiptItems = state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId) || {})).map((receipt) => ({
-    kind: "receipt",
-    id: receipt.id,
-    date: receipt.date,
-    status: receipt.status || "draft",
-    title: `Kvitto · ${receipt.supplier}`,
-    subtitle: `${getClient(receipt.clientId)?.name || "Intern"} · ${getProject(receipt.projectId)?.name || "Inget projekt"}`,
-    value: formatCurrency(Number(receipt.amount || 0)),
-    note: receipt.reviewNote || "",
-    actions: getBasisApprovalActions(receipt.status || "draft")
-  }));
-  const travelItems = state.travels.filter((travel) => isClientVisible(getClient(travel.clientId) || {})).map((travel) => ({
-    kind: "travel",
-    id: travel.id,
-    date: travel.date,
-    status: travel.status || "draft",
-    title: travel.type === "allowance" ? "Traktamente" : "Milersättning",
-    subtitle: `${travel.from || "-"} till ${travel.to || "-"} · ${getClient(travel.clientId)?.name || "Intern"}`,
-    value: travel.type === "allowance" ? `${String(travel.quantity || 0).replace(".", ",")} dagar` : `${String(travel.quantity || 0).replace(".", ",")} km`,
-    note: travel.reviewNote || "",
-    actions: getBasisApprovalActions(travel.status || "draft")
-  }));
+  const entryItems = state.entries.filter(isEntryVisible).map((entry) => {
+    const client = getClient(entry.clientId);
+    const project = getProject(entry.projectId);
+    return {
+      kind: "entry",
+      id: entry.id,
+      date: entry.date,
+      status: entry.status || "draft",
+      title: `${entry.employee} · ${getTypeLabel(entry.type)}`,
+      subtitle: `${client?.name || "Okänd kund"} · ${entry.task}`,
+      value: formatHours(Number(entry.hours || 0)),
+      note: entry.reviewNote || "",
+      owner: entry.employee || "",
+      clientId: entry.clientId || "",
+      projectId: entry.projectId || "",
+      haystack: `${entry.employee} ${getTypeLabel(entry.type)} ${client?.name || ""} ${project?.name || ""} ${entry.task} ${entry.description || ""}`,
+      actions: getBasisApprovalActions(entry.status || "draft")
+    };
+  });
+  const receiptItems = state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId) || {})).map((receipt) => {
+    const client = getClient(receipt.clientId);
+    const project = getProject(receipt.projectId);
+    return {
+      kind: "receipt",
+      id: receipt.id,
+      date: receipt.date,
+      status: receipt.status || "draft",
+      title: `Kvitto · ${receipt.supplier}`,
+      subtitle: `${client?.name || "Intern"} · ${project?.name || "Inget projekt"}`,
+      value: formatCurrency(Number(receipt.amount || 0)),
+      note: receipt.reviewNote || "",
+      owner: receipt.employee || getCurrentUser().name,
+      clientId: receipt.clientId || "",
+      projectId: receipt.projectId || "",
+      haystack: `${receipt.supplier} ${client?.name || ""} ${project?.name || ""} ${receipt.amount || ""}`,
+      actions: getBasisApprovalActions(receipt.status || "draft")
+    };
+  });
+  const travelItems = state.travels.filter((travel) => isClientVisible(getClient(travel.clientId) || {})).map((travel) => {
+    const client = getClient(travel.clientId);
+    return {
+      kind: "travel",
+      id: travel.id,
+      date: travel.date,
+      status: travel.status || "draft",
+      title: travel.type === "allowance" ? "Traktamente" : "Milersättning",
+      subtitle: `${travel.from || "-"} till ${travel.to || "-"} · ${client?.name || "Intern"}`,
+      value: travel.type === "allowance" ? `${String(travel.quantity || 0).replace(".", ",")} dagar` : `${String(travel.quantity || 0).replace(".", ",")} km`,
+      note: travel.reviewNote || "",
+      owner: travel.employee || getCurrentUser().name,
+      clientId: travel.clientId || "",
+      projectId: "",
+      haystack: `${travel.from || ""} ${travel.to || ""} ${client?.name || ""} ${travel.quantity || ""}`,
+      actions: getBasisApprovalActions(travel.status || "draft")
+    };
+  });
   const agreementItems = state.agreements.filter((agreement) => isAdminUser() || isOwnerUser()).filter((agreement) => isClientVisible(getClient(agreement.clientId) || {})).map((agreement) => {
     const status = getEffectiveAgreementStatus(agreement);
     return {
@@ -1947,6 +1978,10 @@ function getApprovalItems({ includeApproved = false } = {}) {
       subtitle: `${getClient(agreement.clientId)?.name || "Okänd kund"} · ${getProject(agreement.projectId)?.name || "Inget projekt"}`,
       value: agreement.number ? `#${agreement.number}` : "Avtal",
       note: agreement.message || "",
+      owner: agreement.owner || "",
+      clientId: agreement.clientId || "",
+      projectId: agreement.projectId || "",
+      haystack: `${agreement.title} ${agreement.number || ""} ${agreement.owner || ""} ${getClient(agreement.clientId)?.name || ""} ${getProject(agreement.projectId)?.name || ""}`,
       actions: getAgreementApprovalActions(status)
     };
   });
@@ -1961,6 +1996,10 @@ function getApprovalItems({ includeApproved = false } = {}) {
       subtitle: `${getClient(item.clientId)?.name || "Okänd signerare"} · ${getAgreement(item.agreementId)?.title || item.docType}`,
       value: item.number ? `#${item.number}` : "Signering",
       note: item.message || "",
+      owner: item.owner || "",
+      clientId: item.clientId || "",
+      projectId: getAgreement(item.agreementId)?.projectId || "",
+      haystack: `${item.title} ${item.number || ""} ${item.owner || ""} ${item.docType || ""} ${getClient(item.clientId)?.name || ""} ${getAgreement(item.agreementId)?.title || ""}`,
       actions: getEsignApprovalActions(status)
     };
   });
@@ -1975,6 +2014,10 @@ function getApprovalItems({ includeApproved = false } = {}) {
       subtitle: `${getClient(invoice.clientId)?.name || "Okänd kund"} · ${getProject(invoice.projectId)?.name || "Okänt projekt"}`,
       value: formatSEK(Number(invoice.totalInclVat || invoice.total || 0)),
       note: invoice.billingEmail ? `Skickas till ${invoice.billingEmail}` : "",
+      owner: "",
+      clientId: invoice.clientId || "",
+      projectId: invoice.projectId || "",
+      haystack: `${invoice.number} ${invoice.billingEmail || ""} ${getClient(invoice.clientId)?.name || ""} ${getProject(invoice.projectId)?.name || ""}`,
       actions: getInvoiceApprovalActions(status)
     };
   });
@@ -2833,6 +2876,155 @@ function renderReportCatalog() {
   `).join("");
 }
 
+function isApprovalDone(status) {
+  return ["approved", "signed", "paid", "invoiced"].includes(status);
+}
+
+function isApprovalBlocked(status) {
+  return ["rejected", "expired", "overdue", "changeRequested"].includes(status);
+}
+
+function matchesApprovalStatusFilter(item, filter) {
+  if (filter === "all") return true;
+  if (filter === "open") return !isApprovalDone(item.status);
+  if (filter === "submitted") return ["submitted", "sent", "created", "customerApproved"].includes(item.status);
+  if (filter === "draft") return ["draft", "rejected"].includes(item.status);
+  if (filter === "approved") return isApprovalDone(item.status);
+  if (filter === "blocked") return isApprovalBlocked(item.status);
+  return true;
+}
+
+function getFilteredApprovalItems(items) {
+  const query = (els.approvalSearch?.value || "").trim().toLowerCase();
+  const kind = els.approvalKindFilter?.value || "all";
+  const status = els.approvalStatusFilter?.value || "open";
+  return items.filter((item) => {
+    const matchesKind = kind === "all" || item.kind === kind;
+    const matchesStatus = matchesApprovalStatusFilter(item, status);
+    const matchesQuery = !query || `${item.title} ${item.subtitle} ${item.value} ${item.note} ${item.haystack || ""}`.toLowerCase().includes(query);
+    return matchesKind && matchesStatus && matchesQuery;
+  });
+}
+
+function getApprovalItemKey(item) {
+  return `${item.kind}:${item.id}`;
+}
+
+function getSelectedApprovalTargets() {
+  return [...document.querySelectorAll("[data-approval-select]:checked")]
+    .map((checkbox) => {
+      const [kind, id] = checkbox.dataset.approvalSelect.split(":");
+      return { kind, id };
+    });
+}
+
+function renderApprovalFlow() {
+  if (!els.approvalList) return;
+  const allItems = getApprovalItems({ includeApproved: true });
+  const visibleItems = getFilteredApprovalItems(allItems);
+  const waiting = allItems.filter((item) => ["submitted", "sent", "created", "customerApproved"].includes(item.status));
+  const blocked = allItems.filter((item) => isApprovalBlocked(item.status));
+  const done = allItems.filter((item) => isApprovalDone(item.status));
+  const drafts = allItems.filter((item) => ["draft", "rejected"].includes(item.status));
+
+  if (els.approvalSummary) {
+    els.approvalSummary.innerHTML = `
+      <div><span>Väntar attest</span><strong>${waiting.length}</strong></div>
+      <div><span>Utkast</span><strong>${drafts.length}</strong></div>
+      <div><span>Spärrade/förfallna</span><strong>${blocked.length}</strong></div>
+      <div><span>Klara</span><strong>${done.length}</strong></div>
+      <div><span>Visas nu</span><strong>${visibleItems.length}</strong></div>
+    `;
+  }
+
+  if (els.approvalSelectAll) {
+    els.approvalSelectAll.checked = false;
+  }
+
+  if (!visibleItems.length) {
+    renderEmpty(els.approvalList);
+    return;
+  }
+
+  els.approvalList.innerHTML = visibleItems.map((item) => {
+    const canSelect = (item.actions || []).length > 0;
+    return `
+      <div class="approval-card ${getWorkflowBadgeClass(item.kind, item.status)}">
+        <label class="approval-select-cell" aria-label="Markera ${escapeHtml(item.title)}">
+          <input type="checkbox" data-approval-select="${escapeHtml(getApprovalItemKey(item))}" ${canSelect ? "" : "disabled"}>
+        </label>
+        <div>
+          <div class="approval-title">
+            <strong>${escapeHtml(item.title)}</strong>
+            <span class="badge ${getWorkflowBadgeClass(item.kind, item.status)}">${getWorkflowStatusLabel(item.kind, item.status)}</span>
+          </div>
+          <span>${escapeHtml(item.subtitle)} · ${item.date}</span>
+          <small class="approval-meta">${escapeHtml(item.owner || "Ingen ansvarig")} · ${escapeHtml(getApprovalKindLabel(item.kind))}</small>
+          ${item.note ? `<small class="review-note">${escapeHtml(item.note)}</small>` : ""}
+        </div>
+        <div class="approval-actions">
+          <strong>${escapeHtml(item.value)}</strong>
+          <button class="ghost-button small-button" type="button" data-approval-open="${item.kind}" data-approval-id="${item.id}">Öppna</button>
+          ${(item.actions || []).map((action) => `
+            <button class="${action.style === "primary" ? "primary-button" : "ghost-button"} small-button" type="button" data-approval-action="${action.action}" data-approval-kind="${item.kind}" data-approval-id="${item.id}">${escapeHtml(action.label)}</button>
+          `).join("")}
+          ${isApprovalDone(item.status) ? `<span class="muted-line">Klart</span>` : ""}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function getApprovalKindLabel(kind) {
+  return {
+    entry: "Tid",
+    receipt: "Kvitto",
+    travel: "Resa",
+    agreement: "Avtal",
+    esign: "E-signering",
+    invoice: "Faktura"
+  }[kind] || kind;
+}
+
+function openApprovalItem(kind, id) {
+  if (kind === "entry" || kind === "receipt" || kind === "travel") {
+    openEntityEditor(kind, id);
+    return true;
+  }
+  if (kind === "agreement") {
+    openAgreementDetail(id);
+    return true;
+  }
+  if (kind === "esign") {
+    openEsignDetail(id);
+    return true;
+  }
+  if (kind === "invoice") {
+    openInvoiceRecordDetail(id);
+    return true;
+  }
+  return false;
+}
+
+function runApprovalBulkAction(action) {
+  const selected = getSelectedApprovalTargets();
+  if (!selected.length) {
+    showToast("Markera minst en post i attestflödet först.", "warning");
+    return;
+  }
+
+  let changed = 0;
+  selected.forEach((target) => {
+    if (handleApprovalAction(action, target.kind, target.id)) changed += 1;
+  });
+
+  if (!changed) {
+    showToast("Inga markerade poster kunde hanteras med den åtgärden.", "warning");
+    return;
+  }
+  showToast(`${changed} markerade poster hanterades.`);
+}
+
 function renderReports() {
   renderReportCatalog();
   const visibleEntriesForReports = state.entries.filter(isEntryVisible);
@@ -2967,31 +3159,7 @@ function renderReports() {
 
   renderUserAdministration();
 
-  const pendingItems = getApprovalItems({ includeApproved: true });
-
-  if (!pendingItems.length) {
-    renderEmpty(els.approvalList);
-  } else {
-    els.approvalList.innerHTML = pendingItems.map((item) => `
-      <div class="approval-card ${getWorkflowBadgeClass(item.kind, item.status)}">
-        <div>
-          <div class="approval-title">
-            <strong>${escapeHtml(item.title)}</strong>
-            <span class="badge ${getWorkflowBadgeClass(item.kind, item.status)}">${getWorkflowStatusLabel(item.kind, item.status)}</span>
-          </div>
-          <span>${escapeHtml(item.subtitle)} · ${item.date}</span>
-          ${item.note ? `<small class="review-note">${escapeHtml(item.note)}</small>` : ""}
-        </div>
-        <div class="approval-actions">
-          <strong>${escapeHtml(item.value)}</strong>
-          ${(item.actions || []).map((action) => `
-            <button class="${action.style === "primary" ? "primary-button" : "ghost-button"} small-button" type="button" data-approval-action="${action.action}" data-approval-kind="${item.kind}" data-approval-id="${item.id}">${escapeHtml(action.label)}</button>
-          `).join("")}
-          ${["approved", "signed", "paid"].includes(item.status) ? `<span class="muted-line">Klart</span>` : ""}
-        </div>
-      </div>
-    `).join("");
-  }
+  renderApprovalFlow();
 }
 
 function renderUserAdministration() {
@@ -6523,10 +6691,33 @@ els.travelList.addEventListener("click", (event) => {
 });
 
 els.approvalList.addEventListener("click", (event) => {
+  const openButton = event.target.closest("[data-approval-open]");
+  if (openButton) {
+    openApprovalItem(openButton.dataset.approvalOpen, openButton.dataset.approvalId);
+    return;
+  }
+
   const button = event.target.closest("[data-approval-action]");
   if (!button) return;
   handleApprovalAction(button.dataset.approvalAction, button.dataset.approvalKind, button.dataset.approvalId);
 });
+
+["input", "change"].forEach((eventName) => {
+  els.approvalSearch?.addEventListener(eventName, renderApprovalFlow);
+});
+els.approvalKindFilter?.addEventListener("change", renderApprovalFlow);
+els.approvalStatusFilter?.addEventListener("change", renderApprovalFlow);
+
+els.approvalSelectAll?.addEventListener("change", () => {
+  const checkboxes = [...document.querySelectorAll("[data-approval-select]:not(:disabled)")];
+  checkboxes.forEach((checkbox) => {
+    checkbox.checked = els.approvalSelectAll.checked;
+  });
+});
+
+els.approvalBulkSubmit?.addEventListener("click", () => runApprovalBulkAction("submit"));
+els.approvalBulkApprove?.addEventListener("click", () => runApprovalBulkAction("approve"));
+els.approvalBulkReject?.addEventListener("click", () => runApprovalBulkAction("reject"));
 
 els.agreementsTable.addEventListener("click", (event) => {
   const detailButton = event.target.closest("[data-agreement-detail]");

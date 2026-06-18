@@ -1304,6 +1304,45 @@
                 <p class="eyebrow">Attest</p>
                 <h2>Attestflöde</h2>
               </div>
+              <div class="top-actions">
+                <button class="ghost-button small-button" id="approval-bulk-submit" type="button">Skicka valda</button>
+                <button class="primary-button small-button" id="approval-bulk-approve" type="button">Godkänn valda</button>
+                <button class="ghost-button small-button" id="approval-bulk-reject" type="button">Avvisa valda</button>
+              </div>
+            </div>
+            <div class="client-detail-metrics portal-metrics approval-summary" id="approval-summary"></div>
+            <div class="approval-toolbar">
+              <label>
+                Sök
+                <input id="approval-search" type="search" placeholder="Sök medarbetare, kund, projekt eller nummer">
+              </label>
+              <label>
+                Typ
+                <select id="approval-kind-filter">
+                  <option value="all">Alla typer</option>
+                  <option value="entry">Tid</option>
+                  <option value="receipt">Kvitton</option>
+                  <option value="travel">Resor</option>
+                  <option value="agreement">Avtal</option>
+                  <option value="esign">E-signering</option>
+                  <option value="invoice">Fakturor</option>
+                </select>
+              </label>
+              <label>
+                Status
+                <select id="approval-status-filter">
+                  <option value="open">Öppna attester</option>
+                  <option value="submitted">Väntar attest</option>
+                  <option value="draft">Utkast</option>
+                  <option value="approved">Godkända/klara</option>
+                  <option value="blocked">Avvisade/förfallna</option>
+                  <option value="all">Alla</option>
+                </select>
+              </label>
+              <label class="checkbox-line">
+                <input id="approval-select-all" type="checkbox">
+                Markera synliga
+              </label>
             </div>
             <div class="activity-list" id="approval-list"></div>
           </section>
