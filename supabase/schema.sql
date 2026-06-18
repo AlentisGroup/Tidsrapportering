@@ -527,6 +527,12 @@ create policy "time_entries_owner_admin_update" on public.time_entries
     or employee_profile_id = auth.uid()
   ) with check (organization_id = public.current_org_id());
 
+create policy "time_entries_owner_admin_delete" on public.time_entries
+  for delete using (
+    public.is_admin_or_owner()
+    or employee_profile_id = auth.uid()
+  );
+
 create policy "receipts_select_visible" on public.receipts
   for select using (public.can_access_client(client_id));
 

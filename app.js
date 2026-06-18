@@ -890,6 +890,27 @@ function mapCloudProject(row) {
   };
 }
 
+function mapCloudEntry(row) {
+  const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
+  return {
+    id: row.id,
+    date: row.entry_date,
+    employee: profile?.full_name || cloudProfile?.full_name || getCurrentUser().name,
+    type: row.entry_type || "project",
+    clientId: row.client_id,
+    projectId: row.project_id || "",
+    workOrder: row.work_order || "",
+    task: row.task || "",
+    hours: Number(row.hours || 0),
+    billable: Boolean(row.billable),
+    payroll: Boolean(row.payroll),
+    status: row.status || "draft",
+    reviewNote: row.review_note || "",
+    description: row.description || "",
+    cloudSyncedAt: row.created_at || ""
+  };
+}
+
 function toCloudClientRow(client) {
   return {
     organization_id: getSupabaseOrganizationId(),
@@ -921,6 +942,25 @@ function toCloudProjectRow(project) {
   };
 }
 
+function toCloudEntryRow(entry) {
+  return {
+    organization_id: getSupabaseOrganizationId(),
+    client_id: entry.clientId,
+    project_id: entry.projectId || null,
+    employee_profile_id: cloudProfile?.id || cloudSession?.user?.id,
+    entry_date: entry.date,
+    entry_type: entry.type || "project",
+    work_order: entry.workOrder || null,
+    task: entry.task || "Tidrapportering",
+    hours: Number(entry.hours || 0),
+    billable: Boolean(entry.billable),
+    payroll: Boolean(entry.payroll),
+    status: entry.status || "draft",
+    review_note: entry.reviewNote || null,
+    description: entry.description || null
+  };
+}
+
 function remapClientId(oldId, newId) {
   if (!oldId || !newId || oldId === newId) return;
   state.clients.forEach((client) => {
@@ -945,6 +985,13 @@ function remapProjectId(oldId, newId) {
     });
   });
   if (selectedProjectId === oldId) selectedProjectId = newId;
+}
+
+function remapEntryId(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  state.entries.forEach((entry) => {
+    if (entry.id === oldId) entry.id = newId;
+  });
 }
 
 async function loadCloudBusinessData() {
@@ -975,6 +1022,17 @@ async function loadCloudBusinessData() {
     }
   }
   if (projects?.length) state.projects = projects.map(mapCloudProject);
+
+  const { data: entries, error: entryError } = await supabaseClient
+    .from("time_entries")
+    .select("id, client_id, project_id, employee_profile_id, entry_date, entry_type, work_order, task, hours, billable, payroll, status, review_note, description, created_at, profiles:employee_profile_id(full_name, email)")
+    .order("entry_date", { ascending: false });
+  if (entryError) {
+    showToast(`Tidsrader kunde inte läsas från Supabase: ${entryError.message}`, "warning");
+  } else if (entries?.length) {
+    state.entries = entries.map(mapCloudEntry);
+  }
+
   saveState();
   renderAll();
   return true;
@@ -1016,6 +1074,20 @@ async function ensureCloudClient(clientId) {
   return clientId;
 }
 
+async function ensureCloudProject(projectId) {
+  if (!projectId || isUuid(projectId)) return projectId || "";
+  const project = getProject(projectId);
+  if (!project) return projectId;
+  const saved = await saveCloudProject(project);
+  if (saved?.id) {
+    const oldId = project.id;
+    Object.assign(project, saved);
+    remapProjectId(oldId, saved.id);
+    return saved.id;
+  }
+  return projectId;
+}
+
 async function saveCloudProject(project) {
   if (!canUseCloudData()) return null;
   project.clientId = await ensureCloudClient(project.clientId);
@@ -1042,6 +1114,38 @@ async function saveCloudProject(project) {
   return mapCloudProject(data);
 }
 
+async function saveCloudEntry(entry) {
+  if (!canUseCloudData()) return null;
+  entry.clientId = await ensureCloudClient(entry.clientId);
+  entry.projectId = await ensureCloudProject(entry.projectId);
+  if (!isUuid(entry.clientId)) {
+    throw new Error("Tidsradens kund behöver vara sparad i Supabase först.");
+  }
+  if (entry.projectId && !isUuid(entry.projectId)) {
+    throw new Error("Tidsradens projekt behöver vara sparat i Supabase först.");
+  }
+
+  const payload = toCloudEntryRow(entry);
+  if (isUuid(entry.id)) {
+    const { data, error } = await supabaseClient
+      .from("time_entries")
+      .update(payload)
+      .eq("id", entry.id)
+      .select("id, client_id, project_id, employee_profile_id, entry_date, entry_type, work_order, task, hours, billable, payroll, status, review_note, description, created_at, profiles:employee_profile_id(full_name, email)")
+      .single();
+    if (error) throw error;
+    return mapCloudEntry(data);
+  }
+
+  const { data, error } = await supabaseClient
+    .from("time_entries")
+    .insert(payload)
+    .select("id, client_id, project_id, employee_profile_id, entry_date, entry_type, work_order, task, hours, billable, payroll, status, review_note, description, created_at, profiles:employee_profile_id(full_name, email)")
+    .single();
+  if (error) throw error;
+  return mapCloudEntry(data);
+}
+
 async function deleteCloudClient(clientId) {
   if (!canUseCloudData() || !isUuid(clientId)) return true;
   const { error } = await supabaseClient.from("clients").delete().eq("id", clientId);
@@ -1052,6 +1156,13 @@ async function deleteCloudClient(clientId) {
 async function deleteCloudProject(projectId) {
   if (!canUseCloudData() || !isUuid(projectId)) return true;
   const { error } = await supabaseClient.from("projects").delete().eq("id", projectId);
+  if (error) throw error;
+  return true;
+}
+
+async function deleteCloudEntry(entryId) {
+  if (!canUseCloudData() || !isUuid(entryId)) return true;
+  const { error } = await supabaseClient.from("time_entries").delete().eq("id", entryId);
   if (error) throw error;
   return true;
 }
@@ -3616,7 +3727,7 @@ function openApprovalItem(kind, id) {
   return false;
 }
 
-function runApprovalBulkAction(action) {
+async function runApprovalBulkAction(action) {
   const selected = getSelectedApprovalTargets();
   if (!selected.length) {
     showToast("Markera minst en post i attestflödet först.", "warning");
@@ -3624,9 +3735,9 @@ function runApprovalBulkAction(action) {
   }
 
   let changed = 0;
-  selected.forEach((target) => {
-    if (handleApprovalAction(action, target.kind, target.id)) changed += 1;
-  });
+  for (const target of selected) {
+    if (await handleApprovalAction(action, target.kind, target.id)) changed += 1;
+  }
 
   if (!changed) {
     showToast("Inga markerade poster kunde hanteras med den åtgärden.", "warning");
@@ -5598,7 +5709,7 @@ function setApprovalStatus(kind, id, status, note = "") {
   return true;
 }
 
-function handleApprovalAction(action, kind, id) {
+async function handleApprovalAction(action, kind, id) {
   if (!action || !kind || !id) return false;
   if (kind === "agreement") return handleAgreementWorkflowAction(action, id);
   if (kind === "esign") return handleEsignWorkflowAction(action, id);
@@ -5620,6 +5731,18 @@ function handleApprovalAction(action, kind, id) {
     if (!setApprovalStatus(kind, id, "submitted")) return false;
   } else {
     return false;
+  }
+
+  if (kind === "entry" && canUseCloudData()) {
+    const entry = state.entries.find((item) => item.id === id);
+    if (entry) {
+      try {
+        const savedEntry = await saveCloudEntry(entry);
+        if (savedEntry?.id) Object.assign(entry, savedEntry);
+      } catch (error) {
+        showToast(`Atteststatus sparades lokalt men inte i Supabase: ${error.message}`, "warning");
+      }
+    }
   }
 
   saveState();
@@ -5844,6 +5967,18 @@ async function updateEditedEntity(form) {
     entry.billable = data.has("billable");
     entry.payroll = data.has("payroll");
     entry.description = data.get("description").trim();
+    if (canUseCloudData()) {
+      try {
+        const savedEntry = await saveCloudEntry(entry);
+        if (savedEntry?.id) {
+          const oldId = entry.id;
+          Object.assign(entry, savedEntry);
+          remapEntryId(oldId, savedEntry.id);
+        }
+      } catch (error) {
+        showToast(`Tidsraden sparades lokalt men inte i Supabase: ${error.message}`, "warning");
+      }
+    }
   }
 
   if (kind === "receipt") {
@@ -5973,8 +6108,8 @@ function openModule(moduleName, button) {
   showToast(`${button.textContent.trim()} är kopplad till närmaste färdiga vy i prototypen.`);
 }
 
-function addEntry(entry) {
-  state.entries.unshift({
+async function addEntry(entry) {
+  const row = {
     id: makeId(),
     date: entry.date,
     employee: entry.employee,
@@ -5989,9 +6124,19 @@ function addEntry(entry) {
     status: entry.status,
     reviewNote: "",
     description: entry.description || ""
-  });
+  };
+  if (canUseCloudData()) {
+    try {
+      const savedEntry = await saveCloudEntry(row);
+      if (savedEntry?.id) Object.assign(row, savedEntry);
+    } catch (error) {
+      showToast(`Tidsraden sparades lokalt men inte i Supabase: ${error.message}`, "warning");
+    }
+  }
+  state.entries.unshift(row);
   saveState();
   renderAll();
+  return row;
 }
 
 function startTimer() {
@@ -6010,14 +6155,14 @@ function startTimer() {
   showToast("Timern startade.");
 }
 
-function stopTimer() {
+async function stopTimer() {
   if (!timer.running) return;
 
   window.clearInterval(timer.interval);
   timer.elapsedSeconds = Math.max(60, Math.round((Date.now() - timer.startedAt) / 1000));
   const hours = Math.max(0.1, Math.round((timer.elapsedSeconds / 3600) * 10) / 10);
 
-  addEntry({
+  await addEntry({
     date: isoToday,
     employee: "Anna Berg",
     type: els.timerType.value,
@@ -6559,12 +6704,14 @@ els.analysisCards?.addEventListener("click", (event) => {
   showToast("Öppnade analysens arbetsunderlag.");
 });
 
-function approveSubmittedForEmployee(employee) {
+async function approveSubmittedForEmployee(employee) {
   let count = 0;
+  const changedEntries = [];
   state.entries.forEach((entry) => {
     if ((entry.employee || getCurrentUser().name) === employee && entry.status === "submitted") {
       entry.status = "approved";
       entry.reviewNote = "";
+      changedEntries.push(entry);
       count += 1;
     }
   });
@@ -6582,15 +6729,25 @@ function approveSubmittedForEmployee(employee) {
       count += 1;
     }
   });
+  if (canUseCloudData()) {
+    for (const entry of changedEntries) {
+      try {
+        const savedEntry = await saveCloudEntry(entry);
+        if (savedEntry?.id) Object.assign(entry, savedEntry);
+      } catch (error) {
+        showToast(`En tidsrad attesterades lokalt men inte i Supabase: ${error.message}`, "warning");
+      }
+    }
+  }
   return count;
 }
 
-els.timePeriodBoard?.addEventListener("click", (event) => {
+els.timePeriodBoard?.addEventListener("click", async (event) => {
   const employeeButton = event.target.closest("[data-time-employee]");
   const approveButton = event.target.closest("[data-time-approve-employee]");
 
   if (approveButton) {
-    const count = approveSubmittedForEmployee(approveButton.dataset.timeApproveEmployee);
+    const count = await approveSubmittedForEmployee(approveButton.dataset.timeApproveEmployee);
     if (!count) {
       showToast("Det fanns inget inskickat att attestera för medarbetaren.", "warning");
       return;
@@ -6613,9 +6770,12 @@ els.timeExpandBlocks?.addEventListener("click", () => {
   showToast(els.timePeriodBoard?.classList.contains("expanded") ? "Alla tidsblock expanderades." : "Tidsblocken komprimerades.");
 });
 
-els.timeAttestMonth?.addEventListener("click", () => {
+els.timeAttestMonth?.addEventListener("click", async () => {
   const employees = [...new Set(state.entries.filter(isEntryVisible).map((entry) => entry.employee || getCurrentUser().name))];
-  const count = employees.reduce((sum, employee) => sum + approveSubmittedForEmployee(employee), 0);
+  let count = 0;
+  for (const employee of employees) {
+    count += await approveSubmittedForEmployee(employee);
+  }
   if (!count) {
     showToast("Det finns inga inskickade poster att attestera i perioden.", "warning");
     return;
@@ -7209,9 +7369,9 @@ els.entryEmployee.value = getCurrentUser().name;
 els.agreementOwner.value = getCurrentUser().name;
 els.esignOwner.value = getCurrentUser().name;
 
-els.entryForm.addEventListener("submit", (event) => {
+els.entryForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  addEntry({
+  await addEntry({
     date: els.entryDate.value,
     employee: els.entryEmployee.value.trim(),
     type: els.entryType.value,
@@ -7228,7 +7388,7 @@ els.entryForm.addEventListener("submit", (event) => {
   els.entryWorkOrder.value = "";
   els.entryDescription.value = "";
   els.entryHours.value = "1.0";
-  showToast("Tidsraden sparades.");
+  showToast(canUseCloudData() ? "Tidsraden sparades." : "Tidsraden sparades lokalt.");
 });
 
 els.clientForm.addEventListener("submit", async (event) => {
@@ -7409,7 +7569,7 @@ els.esignForm.addEventListener("submit", (event) => {
   showToast("E-signeringen skapades.");
 });
 
-els.entriesTable.addEventListener("click", (event) => {
+els.entriesTable.addEventListener("click", async (event) => {
   const submitButton = event.target.closest("[data-submit-entry]");
   const approveButton = event.target.closest("[data-approve]");
   const rejectButton = event.target.closest("[data-reject-entry]");
@@ -7417,17 +7577,17 @@ els.entriesTable.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-delete]");
 
   if (submitButton) {
-    handleApprovalAction("submit", "entry", submitButton.dataset.submitEntry);
+    await handleApprovalAction("submit", "entry", submitButton.dataset.submitEntry);
     return;
   }
 
   if (approveButton) {
-    handleApprovalAction("approve", "entry", approveButton.dataset.approve);
+    await handleApprovalAction("approve", "entry", approveButton.dataset.approve);
     return;
   }
 
   if (rejectButton) {
-    handleApprovalAction("reject", "entry", rejectButton.dataset.rejectEntry);
+    await handleApprovalAction("reject", "entry", rejectButton.dataset.rejectEntry);
     return;
   }
 
@@ -7443,6 +7603,12 @@ els.entriesTable.addEventListener("click", (event) => {
       return;
     }
     if (!window.confirm("Vill du ta bort tidsraden?")) return;
+    try {
+      await deleteCloudEntry(deleteButton.dataset.delete);
+    } catch (error) {
+      showToast(`Tidsraden kunde inte tas bort i Supabase: ${error.message}`, "warning");
+      return;
+    }
     state.entries = state.entries.filter((item) => item.id !== deleteButton.dataset.delete);
     showToast("Tidsraden togs bort.");
     saveState();
@@ -7670,7 +7836,7 @@ els.travelList.addEventListener("click", (event) => {
   }
 });
 
-els.approvalList.addEventListener("click", (event) => {
+els.approvalList.addEventListener("click", async (event) => {
   const openButton = event.target.closest("[data-approval-open]");
   if (openButton) {
     openApprovalItem(openButton.dataset.approvalOpen, openButton.dataset.approvalId);
@@ -7679,7 +7845,7 @@ els.approvalList.addEventListener("click", (event) => {
 
   const button = event.target.closest("[data-approval-action]");
   if (!button) return;
-  handleApprovalAction(button.dataset.approvalAction, button.dataset.approvalKind, button.dataset.approvalId);
+  await handleApprovalAction(button.dataset.approvalAction, button.dataset.approvalKind, button.dataset.approvalId);
 });
 
 ["input", "change"].forEach((eventName) => {
