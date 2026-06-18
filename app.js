@@ -507,6 +507,11 @@ const els = {
   receiptBillable: document.querySelector("#receipt-billable"),
   receiptPayroll: document.querySelector("#receipt-payroll"),
   receiptFile: document.querySelector("#receipt-file"),
+  receiptSummary: document.querySelector("#receipt-summary"),
+  receiptSearch: document.querySelector("#receipt-search"),
+  receiptStatusFilter: document.querySelector("#receipt-status-filter"),
+  receiptSubmitDrafts: document.querySelector("#receipt-submit-drafts"),
+  receiptApproveSubmitted: document.querySelector("#receipt-approve-submitted"),
   receiptList: document.querySelector("#receipt-list"),
   travelForm: document.querySelector("#travel-form"),
   travelDate: document.querySelector("#travel-date"),
@@ -517,6 +522,11 @@ const els = {
   travelClient: document.querySelector("#travel-client"),
   travelBillable: document.querySelector("#travel-billable"),
   travelPayroll: document.querySelector("#travel-payroll"),
+  travelSummary: document.querySelector("#travel-summary"),
+  travelSearch: document.querySelector("#travel-search"),
+  travelStatusFilter: document.querySelector("#travel-status-filter"),
+  travelSubmitDrafts: document.querySelector("#travel-submit-drafts"),
+  travelApproveSubmitted: document.querySelector("#travel-approve-submitted"),
   travelList: document.querySelector("#travel-list"),
   quickCards: document.querySelectorAll("[data-quick-type]"),
   periodModes: document.querySelectorAll("[data-period-mode]"),
@@ -1656,22 +1666,66 @@ function getProjectStatusLabel(status) {
   }[status] || "Aktivt";
 }
 
+function matchesExpenseStatus(status, filter) {
+  if (filter === "all") return true;
+  if (filter === "open") return !["approved", "invoiced"].includes(status);
+  if (filter === "approved") return status === "approved";
+  return status === filter;
+}
+
+function renderExpenseSummary(target, items, getValue) {
+  if (!target) return;
+  const waiting = items.filter((item) => item.status === "submitted").length;
+  const open = items.filter((item) => !["approved", "invoiced"].includes(item.status)).length;
+  const billable = items.filter((item) => item.billable).reduce((sum, item) => sum + getValue(item), 0);
+  const payroll = items.filter((item) => item.payroll).reduce((sum, item) => sum + getValue(item), 0);
+  target.innerHTML = `
+    <div><span>Öppna</span><strong>${open}</strong></div>
+    <div><span>Väntar attest</span><strong>${waiting}</strong></div>
+    <div><span>Till faktura</span><strong>${formatSEK(billable)}</strong></div>
+    <div><span>Till lön</span><strong>${formatSEK(payroll)}</strong></div>
+  `;
+}
+
+function getFilteredReceipts() {
+  const query = (els.receiptSearch?.value || "").trim().toLowerCase();
+  const status = els.receiptStatusFilter?.value || "open";
+  return state.receipts
+    .filter((receipt) => isClientVisible(getClient(receipt.clientId) || {}))
+    .filter((receipt) => matchesExpenseStatus(receipt.status || "draft", status))
+    .filter((receipt) => {
+      const haystack = `${receipt.supplier} ${getClient(receipt.clientId)?.name || ""} ${getProject(receipt.projectId)?.name || ""} ${receipt.fileName || ""}`.toLowerCase();
+      return !query || haystack.includes(query);
+    })
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+}
+
 function renderReceipts() {
-  if (!state.receipts.length) {
+  const receipts = getFilteredReceipts();
+  renderExpenseSummary(els.receiptSummary, state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId) || {})), (receipt) => Number(receipt.amount || 0));
+
+  if (!receipts.length) {
     renderEmpty(els.receiptList);
     return;
   }
 
-  els.receiptList.innerHTML = state.receipts.slice(0, 5).map((receipt) => {
+  els.receiptList.innerHTML = receipts.map((receipt) => {
     const canSubmit = receipt.status === "draft" || receipt.status === "rejected";
     const canReview = receipt.status === "submitted";
+    const client = getClient(receipt.clientId);
+    const project = getProject(receipt.projectId);
     return `
-      <div class="mini-list-item">
+      <div class="mini-list-item expense-card">
         <div>
           <strong>${escapeHtml(receipt.supplier)}</strong>
-          <span>${receipt.date} · ${escapeHtml(getClient(receipt.clientId)?.name || "Intern")} · ${escapeHtml(getProject(receipt.projectId)?.name || "Inget projekt")}</span>
+          <span>${receipt.date} · ${escapeHtml(client?.name || "Intern")} · ${escapeHtml(project?.name || "Inget projekt")}</span>
+          <div class="expense-flags">
+            <button class="${receipt.billable ? "active" : ""}" type="button" data-toggle-receipt-billable="${receipt.id}" ${isLockedStatus(receipt.status) ? "disabled" : ""}>Faktura</button>
+            <button class="${receipt.payroll ? "active" : ""}" type="button" data-toggle-receipt-payroll="${receipt.id}" ${isLockedStatus(receipt.status) ? "disabled" : ""}>Lön</button>
+            <span class="badge ${getApprovalBadgeClass(receipt.status)}">${getApprovalStatusLabel(receipt.status)}</span>
+          </div>
           ${receipt.fileName ? `<button class="text-link inline-link" type="button" data-open-document="receipt" data-document-id="${receipt.id}">${escapeHtml(receipt.fileName)}</button>` : `<span class="muted-line">Ingen fil uppladdad</span>`}
-          <span class="badge ${getApprovalBadgeClass(receipt.status)}">${getApprovalStatusLabel(receipt.status)}</span>
+          ${receipt.reviewNote ? `<small class="review-note">${escapeHtml(receipt.reviewNote)}</small>` : ""}
         </div>
         <div class="mini-list-actions">
           <b>${formatCurrency(Number(receipt.amount || 0))}</b>
@@ -1688,6 +1742,11 @@ function renderReceipts() {
             <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
           </button>
           ` : ""}
+          ${receipt.fileData ? `
+          <button class="mini-button" type="button" title="Öppna kvittofil" aria-label="Öppna kvittofil" data-open-document="receipt" data-document-id="${receipt.id}">
+            <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h8M8 17h4"></path></svg>
+          </button>
+          ` : ""}
           <button class="mini-button" type="button" title="Redigera kvitto" aria-label="Redigera kvitto" data-edit-receipt="${receipt.id}">
             <svg viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4Z"></path></svg>
           </button>
@@ -1700,24 +1759,47 @@ function renderReceipts() {
   }).join("");
 }
 
+function getFilteredTravels() {
+  const query = (els.travelSearch?.value || "").trim().toLowerCase();
+  const status = els.travelStatusFilter?.value || "open";
+  return state.travels
+    .filter((travel) => isClientVisible(getClient(travel.clientId) || {}))
+    .filter((travel) => matchesExpenseStatus(travel.status || "draft", status))
+    .filter((travel) => {
+      const haystack = `${travel.type} ${travel.from || ""} ${travel.to || ""} ${getClient(travel.clientId)?.name || ""}`.toLowerCase();
+      return !query || haystack.includes(query);
+    })
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+}
+
 function renderTravels() {
-  if (!state.travels.length) {
+  const travels = getFilteredTravels();
+  renderExpenseSummary(els.travelSummary, state.travels.filter((travel) => isClientVisible(getClient(travel.clientId) || {})), getTravelValue);
+
+  if (!travels.length) {
     renderEmpty(els.travelList);
     return;
   }
 
-  els.travelList.innerHTML = state.travels.slice(0, 5).map((travel) => {
+  els.travelList.innerHTML = travels.map((travel) => {
     const canSubmit = travel.status === "draft" || travel.status === "rejected";
     const canReview = travel.status === "submitted";
+    const value = getTravelValue(travel);
     return `
-      <div class="mini-list-item">
+      <div class="mini-list-item expense-card">
         <div>
           <strong>${travel.type === "allowance" ? "Traktamente" : "Milersättning"}</strong>
           <span>${travel.date} · ${escapeHtml(travel.from || "-")} till ${escapeHtml(travel.to || "-")} · ${escapeHtml(getClient(travel.clientId)?.name || "Intern")}</span>
-          <span class="badge ${getApprovalBadgeClass(travel.status)}">${getApprovalStatusLabel(travel.status)}</span>
+          <div class="expense-flags">
+            <button class="${travel.billable ? "active" : ""}" type="button" data-toggle-travel-billable="${travel.id}" ${isLockedStatus(travel.status) ? "disabled" : ""}>Faktura</button>
+            <button class="${travel.payroll ? "active" : ""}" type="button" data-toggle-travel-payroll="${travel.id}" ${isLockedStatus(travel.status) ? "disabled" : ""}>Lön</button>
+            <span class="badge ${getApprovalBadgeClass(travel.status)}">${getApprovalStatusLabel(travel.status)}</span>
+          </div>
+          ${travel.reviewNote ? `<small class="review-note">${escapeHtml(travel.reviewNote)}</small>` : ""}
         </div>
         <div class="mini-list-actions">
-          <b>${Number(travel.quantity || 0).toFixed(1).replace(".", ",")}</b>
+          <b>${formatSEK(value)}</b>
+          <span class="muted-line">${Number(travel.quantity || 0).toFixed(1).replace(".", ",")} ${travel.type === "allowance" ? "dagar" : "mil"}</span>
           ${canSubmit ? `
           <button class="mini-button" type="button" title="Skicka in resa" aria-label="Skicka in resa" data-submit-travel="${travel.id}">
             <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"></path></svg>
@@ -4815,6 +4897,66 @@ function handleApprovalAction(action, kind, id) {
   return true;
 }
 
+function runExpenseBulkAction(kind, action) {
+  const config = {
+    receipt: {
+      label: "kvitton",
+      singular: "kvitto",
+      getItems: getFilteredReceipts,
+      submitFrom: ["draft", "rejected"],
+      approveFrom: ["submitted"]
+    },
+    travel: {
+      label: "resor",
+      singular: "resa",
+      getItems: getFilteredTravels,
+      submitFrom: ["draft", "rejected"],
+      approveFrom: ["submitted"]
+    }
+  }[kind];
+  if (!config) return;
+
+  const fromStatuses = action === "approve" ? config.approveFrom : config.submitFrom;
+  const nextStatus = action === "approve" ? "approved" : "submitted";
+  const rows = config.getItems().filter((item) => fromStatuses.includes(item.status || "draft"));
+
+  if (!rows.length) {
+    showToast(`Inga ${config.label} matchade åtgärden.`, "warning");
+    return;
+  }
+
+  let count = 0;
+  rows.forEach((item) => {
+    if (setApprovalStatus(kind, item.id, nextStatus)) count += 1;
+  });
+
+  if (!count) {
+    showToast(`Inga ${config.label} kunde uppdateras.`, "warning");
+    return;
+  }
+
+  saveState();
+  renderAll();
+  showToast(`${count} ${count === 1 ? config.singular : config.label} ${action === "approve" ? "attesterades" : "skickades in"}.`);
+}
+
+function toggleExpenseFlag(kind, id, field) {
+  const collection = kind === "travel" ? state.travels : state.receipts;
+  const item = collection.find((row) => row.id === id);
+  if (!item) return;
+
+  if (isLockedStatus(item.status)) {
+    showToast("Attesterade och fakturerade underlag är låsta.", "warning");
+    return;
+  }
+
+  item[field] = !item[field];
+  saveState();
+  renderAll();
+  const target = field === "billable" ? "fakturering" : "lön";
+  showToast(`${item[field] ? "Markerad för" : "Borttagen från"} ${target}.`);
+}
+
 function handleAgreementWorkflowAction(action, id) {
   const agreement = getAgreement(id);
   if (!agreement) return false;
@@ -6643,15 +6785,37 @@ els.projectGrid.addEventListener("change", (event) => {
 });
 
 els.receiptList.addEventListener("click", (event) => {
+  const toggleBillable = event.target.closest("[data-toggle-receipt-billable]");
+  const togglePayroll = event.target.closest("[data-toggle-receipt-payroll]");
   const submitButton = event.target.closest("[data-submit-receipt]");
   const approveButton = event.target.closest("[data-approve-receipt]");
   const rejectButton = event.target.closest("[data-reject-receipt]");
   const editButton = event.target.closest("[data-edit-receipt]");
   const deleteButton = event.target.closest("[data-delete-receipt]");
-  if (submitButton) handleApprovalAction("submit", "receipt", submitButton.dataset.submitReceipt);
-  if (approveButton) handleApprovalAction("approve", "receipt", approveButton.dataset.approveReceipt);
-  if (rejectButton) handleApprovalAction("reject", "receipt", rejectButton.dataset.rejectReceipt);
-  if (editButton) openEntityEditor("receipt", editButton.dataset.editReceipt);
+  if (toggleBillable) {
+    toggleExpenseFlag("receipt", toggleBillable.dataset.toggleReceiptBillable, "billable");
+    return;
+  }
+  if (togglePayroll) {
+    toggleExpenseFlag("receipt", togglePayroll.dataset.toggleReceiptPayroll, "payroll");
+    return;
+  }
+  if (submitButton) {
+    handleApprovalAction("submit", "receipt", submitButton.dataset.submitReceipt);
+    return;
+  }
+  if (approveButton) {
+    handleApprovalAction("approve", "receipt", approveButton.dataset.approveReceipt);
+    return;
+  }
+  if (rejectButton) {
+    handleApprovalAction("reject", "receipt", rejectButton.dataset.rejectReceipt);
+    return;
+  }
+  if (editButton) {
+    openEntityEditor("receipt", editButton.dataset.editReceipt);
+    return;
+  }
   if (deleteButton) {
     const receipt = state.receipts.find((item) => item.id === deleteButton.dataset.deleteReceipt);
     if (receipt && isLockedStatus(receipt.status)) {
@@ -6667,15 +6831,37 @@ els.receiptList.addEventListener("click", (event) => {
 });
 
 els.travelList.addEventListener("click", (event) => {
+  const toggleBillable = event.target.closest("[data-toggle-travel-billable]");
+  const togglePayroll = event.target.closest("[data-toggle-travel-payroll]");
   const submitButton = event.target.closest("[data-submit-travel]");
   const approveButton = event.target.closest("[data-approve-travel]");
   const rejectButton = event.target.closest("[data-reject-travel]");
   const editButton = event.target.closest("[data-edit-travel]");
   const deleteButton = event.target.closest("[data-delete-travel]");
-  if (submitButton) handleApprovalAction("submit", "travel", submitButton.dataset.submitTravel);
-  if (approveButton) handleApprovalAction("approve", "travel", approveButton.dataset.approveTravel);
-  if (rejectButton) handleApprovalAction("reject", "travel", rejectButton.dataset.rejectTravel);
-  if (editButton) openEntityEditor("travel", editButton.dataset.editTravel);
+  if (toggleBillable) {
+    toggleExpenseFlag("travel", toggleBillable.dataset.toggleTravelBillable, "billable");
+    return;
+  }
+  if (togglePayroll) {
+    toggleExpenseFlag("travel", togglePayroll.dataset.toggleTravelPayroll, "payroll");
+    return;
+  }
+  if (submitButton) {
+    handleApprovalAction("submit", "travel", submitButton.dataset.submitTravel);
+    return;
+  }
+  if (approveButton) {
+    handleApprovalAction("approve", "travel", approveButton.dataset.approveTravel);
+    return;
+  }
+  if (rejectButton) {
+    handleApprovalAction("reject", "travel", rejectButton.dataset.rejectTravel);
+    return;
+  }
+  if (editButton) {
+    openEntityEditor("travel", editButton.dataset.editTravel);
+    return;
+  }
   if (deleteButton) {
     const travel = state.travels.find((item) => item.id === deleteButton.dataset.deleteTravel);
     if (travel && isLockedStatus(travel.status)) {
@@ -6707,6 +6893,15 @@ els.approvalList.addEventListener("click", (event) => {
 });
 els.approvalKindFilter?.addEventListener("change", renderApprovalFlow);
 els.approvalStatusFilter?.addEventListener("change", renderApprovalFlow);
+
+els.receiptSearch?.addEventListener("input", renderReceipts);
+els.receiptStatusFilter?.addEventListener("change", renderReceipts);
+els.receiptSubmitDrafts?.addEventListener("click", () => runExpenseBulkAction("receipt", "submit"));
+els.receiptApproveSubmitted?.addEventListener("click", () => runExpenseBulkAction("receipt", "approve"));
+els.travelSearch?.addEventListener("input", renderTravels);
+els.travelStatusFilter?.addEventListener("change", renderTravels);
+els.travelSubmitDrafts?.addEventListener("click", () => runExpenseBulkAction("travel", "submit"));
+els.travelApproveSubmitted?.addEventListener("click", () => runExpenseBulkAction("travel", "approve"));
 
 els.approvalSelectAll?.addEventListener("change", () => {
   const checkboxes = [...document.querySelectorAll("[data-approval-select]:not(:disabled)")];

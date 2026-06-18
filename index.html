@@ -637,7 +637,23 @@
                 <p class="eyebrow">Kvitton</p>
                 <h2>Registrera utlägg</h2>
               </div>
-              <span class="status-pill">Kvittotolkning</span>
+              <div class="top-actions">
+                <span class="status-pill">Kvittotolkning</span>
+                <button class="ghost-button small-button" id="receipt-submit-drafts" type="button">Skicka utkast</button>
+                <button class="primary-button small-button" id="receipt-approve-submitted" type="button">Attestera inkomna</button>
+              </div>
+            </div>
+            <div class="expense-summary" id="receipt-summary"></div>
+            <div class="expense-toolbar">
+              <input id="receipt-search" type="search" placeholder="Sök leverantör, kund eller projekt">
+              <select id="receipt-status-filter">
+                <option value="open">Öppna kvitton</option>
+                <option value="submitted">Väntar attest</option>
+                <option value="draft">Utkast</option>
+                <option value="approved">Attesterade</option>
+                <option value="invoiced">Fakturerade</option>
+                <option value="all">Alla</option>
+              </select>
             </div>
             <form class="receipt-form" id="receipt-form">
               <label>
@@ -687,6 +703,22 @@
                 <p class="eyebrow">Resor</p>
                 <h2>Körjournal & traktamente</h2>
               </div>
+              <div class="top-actions">
+                <button class="ghost-button small-button" id="travel-submit-drafts" type="button">Skicka utkast</button>
+                <button class="primary-button small-button" id="travel-approve-submitted" type="button">Attestera inkomna</button>
+              </div>
+            </div>
+            <div class="expense-summary" id="travel-summary"></div>
+            <div class="expense-toolbar">
+              <input id="travel-search" type="search" placeholder="Sök sträcka, kund eller typ">
+              <select id="travel-status-filter">
+                <option value="open">Öppna resor</option>
+                <option value="submitted">Väntar attest</option>
+                <option value="draft">Utkast</option>
+                <option value="approved">Attesterade</option>
+                <option value="invoiced">Fakturerade</option>
+                <option value="all">Alla</option>
+              </select>
             </div>
             <form class="travel-form" id="travel-form">
               <label>
