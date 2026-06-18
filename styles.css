@@ -171,6 +171,33 @@ svg {
   border-radius: 50%;
 }
 
+.top-timer-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  border-radius: 999px;
+  padding: 0 10px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.13);
+  font-size: 0.75rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.top-timer-button:hover,
+.top-timer-button.running {
+  border-color: rgba(142, 236, 213, 0.72);
+  background: rgba(18, 124, 120, 0.72);
+}
+
+.top-timer-button svg {
+  width: 16px;
+  height: 16px;
+}
+
 .top-icon:hover {
   background: rgba(255, 255, 255, 0.14);
 }
@@ -2387,6 +2414,14 @@ th {
   gap: 12px;
   grid-template-columns: minmax(0, 1fr) auto;
   padding: 14px;
+}
+
+.workflow-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .pipeline-row {

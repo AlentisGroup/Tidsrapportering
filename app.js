@@ -362,6 +362,8 @@ const els = {
   pageTitle: document.querySelector("#page-title"),
   globalSearch: document.querySelector(".global-search input"),
   topActions: document.querySelectorAll("[data-top-action]"),
+  globalTimerButton: document.querySelector("#global-timer-button"),
+  globalTimerReadout: document.querySelector("#global-timer-readout"),
   cloudStatus: document.querySelector("#cloud-status"),
   roleSwitcher: document.querySelector("#role-switcher"),
   toastStack: document.querySelector("#toast-stack"),
@@ -408,6 +410,7 @@ const els = {
   timerDescription: document.querySelector("#timer-description"),
   startTimer: document.querySelector("#start-timer"),
   stopTimer: document.querySelector("#stop-timer"),
+  copyLastEntry: document.querySelector("#copy-last-entry"),
   entryForm: document.querySelector("#entry-form"),
   entryDate: document.querySelector("#entry-date"),
   entryEmployee: document.querySelector("#entry-employee"),
@@ -1468,12 +1471,14 @@ function isSameISOMonth(dateString, anchorDate = selectedTimeAnchorDate) {
 }
 
 function isInSelectedTimePeriod(dateString) {
+  if (selectedTimePeriodMode === "list") return true;
   if (selectedTimePeriodMode === "week") return isSameISOWeek(dateString);
   if (selectedTimePeriodMode === "month") return isSameISOMonth(dateString);
   return isSameISODate(dateString, selectedTimeAnchorDate);
 }
 
 function getTimePeriodLabel() {
+  if (selectedTimePeriodMode === "list") return "Alla tidsrader";
   if (selectedTimePeriodMode === "week") {
     const start = getWeekStart(new Date(`${selectedTimeAnchorDate}T12:00:00`));
     const end = new Date(start);
@@ -2239,6 +2244,7 @@ function renderProjects() {
         </div>
         <div class="checklist">${checklist}</div>
         <div class="client-card-actions">
+          <button class="primary-button small-button" type="button" data-start-project-timer="${project.id}">Starta klocka</button>
           <button class="ghost-button small-button" type="button" data-open-project="${project.id}">${isSelected ? "Öppet" : "Öppna projektkort"}</button>
           <button class="ghost-button small-button" type="button" data-edit-project="${project.id}">Redigera projekt</button>
           <button class="mini-button" type="button" title="Ta bort projekt" aria-label="Ta bort projekt" data-delete-project="${project.id}">
@@ -2284,6 +2290,7 @@ function renderProjectDetail() {
         <span class="muted-line">${escapeHtml(client?.name || "Okänd kund")} · ${escapeHtml(project.manager || "Ingen ansvarig")}</span>
       </div>
       <div class="row-actions">
+        <button class="primary-button small-button" type="button" data-start-project-timer="${project.id}">Starta klocka</button>
         <button class="ghost-button small-button" type="button" data-client-time="${project.clientId}">Registrera tid</button>
         <button class="ghost-button small-button" type="button" data-client-invoice="${project.clientId}">Fakturera</button>
         <button class="primary-button small-button" type="button" data-edit-project="${project.id}">Redigera</button>
@@ -3295,6 +3302,8 @@ function getTaskWorkflowItems() {
       dueDate: task.dueDate || "",
       status: task.status || "open",
       message: task.message || "",
+      clientId: task.clientId || "",
+      projectId: task.projectId || "",
       actionLabel: "Öppna portal",
       view: "portal"
     }));
@@ -3310,6 +3319,8 @@ function getTaskWorkflowItems() {
       dueDate: item.date || "",
       status: item.status || "draft",
       message: item.value,
+      clientId: item.clientId || "",
+      projectId: item.projectId || "",
       actionLabel: item.status === "submitted" ? "Attestera" : "Öppna tid",
       view: "time"
     }));
@@ -3344,7 +3355,10 @@ function renderTasks() {
           <span>${escapeHtml(task.subtitle)} · ansvarig ${escapeHtml(task.owner)} · ${task.dueDate || "inget datum"}</span>
           ${task.message ? `<small class="review-note">${escapeHtml(task.message)}</small>` : ""}
         </div>
-        <button class="ghost-button small-button" type="button" data-task-open="${task.view}" data-task-kind="${task.kind}" data-task-id="${task.id}">${escapeHtml(task.actionLabel)}</button>
+        <div class="workflow-actions">
+          <button class="ghost-button small-button" type="button" data-task-open="${task.view}" data-task-kind="${task.kind}" data-task-id="${task.id}">${escapeHtml(task.actionLabel)}</button>
+          <button class="primary-button small-button" type="button" data-start-task-timer="${task.id}" data-task-kind="${task.kind}">Starta klocka</button>
+        </div>
       </div>
     `).join("");
   }
@@ -3561,7 +3575,7 @@ function renderTimePeriodOverview() {
   `;
 
   if (!rows.length) {
-    els.timePeriodBoard.innerHTML = `<tr><td colspan="7">${els.emptyTemplate.innerHTML}</td></tr>`;
+    els.timePeriodBoard.innerHTML = `<tr><td colspan="8">${els.emptyTemplate.innerHTML}</td></tr>`;
     return;
   }
 
@@ -3578,6 +3592,11 @@ function renderTimePeriodOverview() {
       <td>
         <span class="badge ${row.submitted ? "submitted" : row.status === "Attesterad" ? "approved" : "draft"}">${escapeHtml(row.status)}</span>
         ${row.submitted ? `<button class="ghost-button small-button" type="button" data-time-approve-employee="${escapeHtml(row.employee)}">Attestera</button>` : ""}
+      </td>
+      <td>
+        <button class="mini-button" type="button" title="Ny tidsrad" aria-label="Ny tidsrad" data-time-new-row="${escapeHtml(row.employee)}">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
       </td>
     </tr>
   `).join("");
@@ -6202,6 +6221,56 @@ async function addEntry(entry) {
   return row;
 }
 
+function prepareTimerContext({ clientId = "", projectId = "", workOrder = "", task = "Bokföring", type = "project", description = "" } = {}) {
+  const client = getClient(clientId) || state.clients.find(isClientVisible) || state.clients[0];
+  const project = getProject(projectId);
+  const resolvedClientId = clientId || project?.clientId || client?.id || "";
+  if (resolvedClientId && els.timerClient) els.timerClient.value = resolvedClientId;
+  if (projectId && els.timerProject) els.timerProject.value = projectId;
+  if (!projectId && project?.id && els.timerProject) els.timerProject.value = project.id;
+  if (els.timerType) els.timerType.value = type || "project";
+  if (els.timerWorkOrder) els.timerWorkOrder.value = workOrder || project?.name || "";
+  if (els.timerTask) els.timerTask.value = task || "Bokföring";
+  if (els.timerDescription) els.timerDescription.value = description || "";
+  syncTimerTypeControls();
+}
+
+function openTimerWithContext(context = {}) {
+  prepareTimerContext(context);
+  setView("time");
+  window.setTimeout(() => {
+    document.querySelector(".timer-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    focusElement(els.timerWorkOrder);
+  }, 50);
+  showToast("Timern är förberedd. Klicka Starta när arbetet börjar.");
+}
+
+function copyPreviousEntryToForm() {
+  const previous = state.entries
+    .filter(isEntryVisible)
+    .sort((a, b) => `${b.date}${b.id}`.localeCompare(`${a.date}${a.id}`))[0];
+  if (!previous) {
+    showToast("Det finns ingen tidigare tidsrad att kopiera.", "warning");
+    return;
+  }
+  els.entryDate.value = isoToday;
+  els.entryEmployee.value = getCurrentUser().name;
+  els.entryType.value = previous.type || "project";
+  els.entryClient.value = previous.clientId || "";
+  els.entryProject.value = previous.projectId || "";
+  els.entryWorkOrder.value = previous.workOrder || "";
+  els.entryTask.value = previous.task || "Bokföring";
+  els.entryHours.value = previous.hours || "1.0";
+  els.entryStatus.value = "draft";
+  els.entryBillable.checked = Boolean(previous.billable);
+  els.entryPayroll.checked = previous.payroll ?? true;
+  els.entryDescription.value = previous.description || "";
+  syncEntryTypeControls();
+  setView("time");
+  focusElement(els.entryHours);
+  showToast("Föregående tidsrad kopierades till manuell registrering.");
+}
+
 function startTimer() {
   if (!els.timerClient.value) {
     showToast("Välj kund innan du startar timern.", "warning");
@@ -6214,6 +6283,7 @@ function startTimer() {
   els.startTimer.disabled = true;
   els.stopTimer.disabled = false;
   els.timerStatus.textContent = "Aktiv";
+  els.globalTimerButton?.classList.add("running");
   updateTimerDisplay();
   showToast("Timern startade.");
 }
@@ -6227,7 +6297,7 @@ async function stopTimer() {
 
   await addEntry({
     date: isoToday,
-    employee: "Anna Berg",
+    employee: getCurrentUser().name,
     type: els.timerType.value,
     clientId: els.timerClient.value,
     projectId: els.timerProject.value,
@@ -6246,6 +6316,7 @@ async function stopTimer() {
   els.startTimer.disabled = false;
   els.stopTimer.disabled = true;
   els.timerStatus.textContent = "Pausad";
+  els.globalTimerButton?.classList.remove("running");
   els.timerWorkOrder.value = "";
   els.timerDescription.value = "";
   updateTimerDisplay();
@@ -6258,6 +6329,7 @@ function updateTimerDisplay() {
   const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
   const s = String(seconds % 60).padStart(2, "0");
   els.timerDisplay.textContent = `${h}:${m}:${s}`;
+  if (els.globalTimerReadout) els.globalTimerReadout.textContent = `${h}:${m}:${s}`;
 }
 
 function syncEntryTypeControls() {
@@ -6690,6 +6762,20 @@ els.taskNewButton?.addEventListener("click", () => {
 });
 
 els.tasksBoard?.addEventListener("click", (event) => {
+  const startButton = event.target.closest("[data-start-task-timer]");
+  if (startButton) {
+    const task = getTaskWorkflowItems().find((item) => item.id === startButton.dataset.startTaskTimer && item.kind === startButton.dataset.taskKind);
+    if (task) {
+      openTimerWithContext({
+        clientId: task.clientId,
+        projectId: task.projectId,
+        workOrder: task.title,
+        task: task.kind === "receipt" ? "Utlägg" : task.kind === "travel" ? "Resa" : "Bokföring",
+        description: task.message || task.subtitle
+      });
+    }
+    return;
+  }
   const button = event.target.closest("[data-task-open]");
   if (!button) return;
   if (button.dataset.taskOpen === "portal") {
@@ -6808,6 +6894,16 @@ async function approveSubmittedForEmployee(employee) {
 els.timePeriodBoard?.addEventListener("click", async (event) => {
   const employeeButton = event.target.closest("[data-time-employee]");
   const approveButton = event.target.closest("[data-time-approve-employee]");
+  const newRowButton = event.target.closest("[data-time-new-row]");
+
+  if (newRowButton) {
+    els.entryEmployee.value = newRowButton.dataset.timeNewRow;
+    els.entryDate.value = selectedTimeAnchorDate || isoToday;
+    setView("time");
+    focusElement(els.entryClient);
+    showToast("Ny tidsrad är förberedd för vald medarbetare.");
+    return;
+  }
 
   if (approveButton) {
     const count = await approveSubmittedForEmployee(approveButton.dataset.timeApproveEmployee);
@@ -6950,6 +7046,10 @@ els.trialLink?.addEventListener("click", (event) => {
 els.topActions.forEach((button) => {
   button.addEventListener("click", () => {
     const action = button.dataset.topAction;
+    if (action === "timer") {
+      openTimerWithContext();
+      return;
+    }
     openDrawer(action);
   });
 });
@@ -7772,9 +7872,23 @@ els.clientDetail?.addEventListener("click", (event) => {
 });
 
 els.projectGrid.addEventListener("click", async (event) => {
+  const startTimerButton = event.target.closest("[data-start-project-timer]");
   const openButton = event.target.closest("[data-open-project]");
   const editButton = event.target.closest("[data-edit-project]");
   const deleteButton = event.target.closest("[data-delete-project]");
+  if (startTimerButton) {
+    const project = getProject(startTimerButton.dataset.startProjectTimer);
+    if (project) {
+      openTimerWithContext({
+        clientId: project.clientId,
+        projectId: project.id,
+        workOrder: project.name,
+        task: "Bokföring",
+        description: project.description || ""
+      });
+    }
+    return;
+  }
   if (openButton) {
     selectedProjectId = openButton.dataset.openProject;
     renderProjects();
@@ -7807,9 +7921,23 @@ els.projectGrid.addEventListener("click", async (event) => {
 });
 
 els.projectDetail?.addEventListener("click", (event) => {
+  const startTimerButton = event.target.closest("[data-start-project-timer]");
   const editProject = event.target.closest("[data-edit-project]");
   const editEntry = event.target.closest("[data-edit-entry]");
   const editReceipt = event.target.closest("[data-edit-receipt]");
+  if (startTimerButton) {
+    const project = getProject(startTimerButton.dataset.startProjectTimer);
+    if (project) {
+      openTimerWithContext({
+        clientId: project.clientId,
+        projectId: project.id,
+        workOrder: project.name,
+        task: "Bokföring",
+        description: project.description || ""
+      });
+    }
+    return;
+  }
   if (editProject) {
     openEntityEditor("project", editProject.dataset.editProject);
     return;
@@ -8390,6 +8518,7 @@ els.entryType.addEventListener("change", syncEntryTypeControls);
 els.timerType.addEventListener("change", syncTimerTypeControls);
 els.startTimer.addEventListener("click", startTimer);
 els.stopTimer.addEventListener("click", stopTimer);
+els.copyLastEntry?.addEventListener("click", copyPreviousEntryToForm);
 els.exportCsv.addEventListener("click", exportCsv);
 
 syncEntryTypeControls();
