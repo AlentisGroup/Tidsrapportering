@@ -3605,16 +3605,14 @@ function renderTimePeriodOverview() {
 function renderInvoiceCommandStrip() {
   if (!els.invoiceCommandStrip) return;
   const rows = getInvoiceRows();
-  const readyRows = rows.filter((row) => row.total > 0 && !row.warning);
-  const warningRows = rows.filter((row) => row.warning > 0);
+  const totals = getInvoiceWorkbenchTotals(rows);
   const draftRows = state.projects.filter((project) => project.invoiceStatus === "draft");
-  const invoiceTotal = rows.reduce((sum, row) => sum + row.total, 0);
 
   els.invoiceCommandStrip.innerHTML = `
     <button class="invoice-command-card" type="button" data-invoice-command="create-ready">
       <span>Skapa klara underlag</span>
-      <strong>${readyRows.length}</strong>
-      <small>${formatCurrency(readyRows.reduce((sum, row) => sum + row.total, 0))}</small>
+      <strong>${totals.readyRows.length}</strong>
+      <small>${formatCurrency(totals.readyRows.reduce((sum, row) => sum + row.total, 0))}</small>
     </button>
     <button class="invoice-command-card" type="button" data-invoice-command="drafts">
       <span>Utkast</span>
@@ -3623,13 +3621,18 @@ function renderInvoiceCommandStrip() {
     </button>
     <button class="invoice-command-card warning" type="button" data-invoice-command="warnings">
       <span>Behöver åtgärd</span>
-      <strong>${warningRows.length}</strong>
+      <strong>${totals.blockedRows.length}</strong>
       <small>Ej attesterad tid/kvitton</small>
     </button>
+    <button class="invoice-command-card warning" type="button" data-invoice-command="customer-data">
+      <span>Kunddata</span>
+      <strong>${totals.customerIssueRows.length}</strong>
+      <small>E-post, referens eller timpris</small>
+    </button>
     <button class="invoice-command-card" type="button" data-invoice-command="history">
-      <span>Fakturaunderlag</span>
-      <strong>${formatCurrency(invoiceTotal)}</strong>
-      <small>Öppna arkiv och status</small>
+      <span>Netto / moms</span>
+      <strong>${formatCurrency(totals.net)}</strong>
+      <small>${formatCurrency(totals.vat)} moms · ${formatCurrency(totals.gross)} totalt</small>
     </button>
   `;
 }
@@ -4238,6 +4241,53 @@ function groupInvoiceRows(rows) {
   }, {}));
 
   return grouped;
+}
+
+function getInvoiceRowIssues(row) {
+  const issues = [];
+  if (row.warning > 0) issues.push(`${row.warning} rad${row.warning === 1 ? "" : "er"} behöver attest`);
+  if (!row.client?.billingEmail && !row.client?.email) issues.push("Faktura-e-post saknas");
+  if (!row.client?.invoiceReference) issues.push("Referens saknas");
+  if (row.hours > 0 && !Number(row.client?.rate || 0)) issues.push("Timpris saknas");
+  if (row.total <= 0) issues.push("Inget belopp");
+  return issues;
+}
+
+function isInvoiceRowReady(row) {
+  const blockingIssues = getInvoiceRowIssues(row).filter((issue) => issue !== "Referens saknas");
+  return row.total > 0 && blockingIssues.length === 0;
+}
+
+function getInvoiceReadinessLabel(row) {
+  const issues = getInvoiceRowIssues(row);
+  if (!issues.length) return "Klar";
+  if (row.warning > 0) return "Attest krävs";
+  if (!row.client?.billingEmail && !row.client?.email) return "Kunddata saknas";
+  return "Kontrollera";
+}
+
+function getInvoiceReadinessBadge(row) {
+  if (isInvoiceRowReady(row)) return "approved";
+  if (row.warning > 0) return "submitted";
+  return "rejected";
+}
+
+function getInvoiceWorkbenchTotals(rows) {
+  const net = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const vatRate = normalizeNumber(state.settings?.vatRate ?? defaultState.settings.vatRate, 25);
+  const vat = Math.round(net * (vatRate / 100));
+  const readyRows = rows.filter(isInvoiceRowReady);
+  const blockedRows = rows.filter((row) => row.warning > 0);
+  const customerIssueRows = rows.filter((row) => getInvoiceRowIssues(row).some((issue) => issue.includes("saknas")));
+  return {
+    net,
+    vat,
+    gross: net + vat,
+    vatRate,
+    readyRows,
+    blockedRows,
+    customerIssueRows
+  };
 }
 
 function isDateInRange(date, from, to) {
@@ -4948,13 +4998,19 @@ function renderInvoiceWorkbench() {
 
   els.invoiceTable.innerHTML = rowsAll.map((row) => {
     const canRunInvoiceAction = state.projects.some((project) => project.id === row.id);
+    const rowIssues = getInvoiceRowIssues(row);
+    const isReady = isInvoiceRowReady(row);
+    const invoiceEmail = row.client?.billingEmail || row.client?.email || "";
     return `
     <tr>
       <td>
         <a href="#" class="table-link" data-invoice-open="${row.id}">${row.number} - ${escapeHtml(row.project.name)}</a>
-        <span class="invoice-icons">${row.warning ? "!" : ""} ↗</span>
+        <span class="table-subtext">${rowIssues.length ? escapeHtml(rowIssues.slice(0, 2).join(" · ")) : "Redo att fakturera"}</span>
       </td>
-      <td>${escapeHtml(row.client?.name || "Okänd kund")}</td>
+      <td>
+        <strong>${escapeHtml(row.client?.name || "Okänd kund")}</strong>
+        <span class="table-subtext">${invoiceEmail ? escapeHtml(invoiceEmail) : "Faktura-e-post saknas"}</span>
+      </td>
       <td>${formatSEK(row.fixedPrice)}</td>
       <td>
         <strong>${formatHours(row.hours)}</strong>
@@ -4963,7 +5019,12 @@ function renderInvoiceWorkbench() {
       <td>${formatSEK(row.articleValue)}</td>
       <td>${formatSEK(row.supplierInvoices)}</td>
       <td>${formatSEK(row.otherValue)}</td>
-      <td><strong>${formatSEK(row.total)}</strong></td>
+      <td>
+        <div class="invoice-status-stack">
+          <strong>${formatSEK(row.total)}</strong>
+          <span class="badge ${getInvoiceReadinessBadge(row)}">${escapeHtml(getInvoiceReadinessLabel(row))}</span>
+        </div>
+      </td>
       <td>
         <div class="row-actions">
           <button class="mini-button" type="button" title="Förhandsgranska" aria-label="Förhandsgranska" data-invoice-preview="${row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
@@ -4975,7 +5036,7 @@ function renderInvoiceWorkbench() {
           <button class="mini-button" type="button" title="Spara som utkast" aria-label="Spara som utkast" data-invoice-draft="${row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
             <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"></path></svg>
           </button>
-          <button class="mini-button" type="button" title="Skapa fakturaunderlag" aria-label="Skapa fakturaunderlag" data-invoice-create="${row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
+          <button class="mini-button" type="button" title="${isReady ? "Skapa fakturaunderlag" : "Komplettera raden innan faktura skapas"}" aria-label="Skapa fakturaunderlag" data-invoice-create="${row.id}" ${canRunInvoiceAction && isReady ? "" : "disabled"}>
             <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg>
           </button>
         </div>
@@ -6969,6 +7030,21 @@ els.invoiceCommandStrip?.addEventListener("click", (event) => {
     return;
   }
 
+  if (command === "customer-data") {
+    const targetRow = getInvoiceRows().find((row) => getInvoiceRowIssues(row).some((issue) => issue.includes("saknas")));
+    if (!targetRow) {
+      showToast("Alla synliga fakturarader har tillräcklig kunddata.", "success");
+      return;
+    }
+    const projectId = (targetRow.sourceProjectIds || [targetRow.id])[0];
+    const project = getProject(projectId);
+    selectedClientId = targetRow.client?.id || project?.clientId || selectedClientId;
+    setView("clients");
+    renderClients();
+    showToast("Öppnade kundkortet som behöver kompletteras för fakturering.");
+    return;
+  }
+
   if (command === "drafts") {
     els.invoiceTabs.forEach((item) => item.classList.toggle("active", item.dataset.invoiceTab === "draft"));
     renderInvoiceWorkbench();
@@ -6978,7 +7054,7 @@ els.invoiceCommandStrip?.addEventListener("click", (event) => {
   }
 
   if (command === "create-ready") {
-    const rows = getInvoiceRows().filter((row) => row.total > 0 && !row.warning);
+    const rows = getInvoiceRows().filter(isInvoiceRowReady);
     const projectIds = [...new Set(rows.flatMap((row) => row.sourceProjectIds || [row.id]))];
     const created = projectIds.reduce((count, projectId) => {
       const record = createInvoiceFromProject(projectId);
