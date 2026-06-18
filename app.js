@@ -339,6 +339,17 @@ const portalTaskTemplates = [
   { type: "Signering", title: "Signera avtal", message: "Läs igenom avtalet och signera eller skriv en kommentar om något ska ändras.", dueDays: 10 }
 ];
 
+const reportDefinitions = [
+  { id: "worked-time", title: "Uppföljning av arbetad och debiterbar tid", tag: "Tidrapportering", description: "Fördelar rapporterade och debiterbara timmar per kund, projekt, aktivitet och medarbetare.", view: "reports", favorite: true },
+  { id: "invoice-basis", title: "Fakturaunderlag", tag: "Fakturering", description: "Visar attesterade poster som kan bli fakturor samt redan skapade fakturaunderlag.", view: "invoice", favorite: true },
+  { id: "payroll", title: "Löneunderlag", tag: "Lön", description: "Samlar arbetad tid, frånvaro, kvitton, resor och traktamenten per medarbetare.", view: "reports", favorite: true },
+  { id: "receipts", title: "Kvitton och utlägg", tag: "Kvitton", description: "Följer upp privata utlägg och inköp med status för attest och eventuell fakturering.", view: "time", favorite: false },
+  { id: "absence", title: "Frånvaro", tag: "Frånvaro", description: "Visar frånvaroorsaker, timmar och lönepåverkan för vald period.", view: "analysis", favorite: false },
+  { id: "internal", title: "Interntid", tag: "Interntid", description: "Analyserar ej debiterbar tid och interna aktiviteter.", view: "analysis", favorite: false },
+  { id: "customers", title: "Kundstatus", tag: "Kund", description: "Kombinerar kundansvarig, projekt, avtal, öppna ärenden och fakturavärde.", view: "clients", favorite: false },
+  { id: "approvals", title: "Attestflöde", tag: "Attest", description: "Lista över tid, kvitton, resor, avtal och fakturor som kräver beslut.", view: "reports", favorite: true }
+];
+
 const els = {
   navItems: document.querySelectorAll("[data-view]"),
   moduleItems: document.querySelectorAll("[data-module]"),
@@ -381,6 +392,10 @@ const els = {
   analysisSummary: document.querySelector("#analysis-summary"),
   timerDisplay: document.querySelector("#timer-display"),
   timerStatus: document.querySelector("#timer-status"),
+  timePeriodSummary: document.querySelector("#time-period-summary"),
+  timePeriodBoard: document.querySelector("#time-period-board"),
+  timeExpandBlocks: document.querySelector("#time-expand-blocks"),
+  timeAttestMonth: document.querySelector("#time-attest-month"),
   timerType: document.querySelector("#timer-type"),
   timerClient: document.querySelector("#timer-client"),
   timerProject: document.querySelector("#timer-project"),
@@ -465,6 +480,7 @@ const els = {
   invoiceTabs: document.querySelectorAll("[data-invoice-tab]"),
   invoiceViewModes: document.querySelectorAll("[data-invoice-viewmode]"),
   invoiceFilterButton: document.querySelector("#invoice-filter-button"),
+  invoiceCommandStrip: document.querySelector("#invoice-command-strip"),
   portalClient: document.querySelector("#portal-client"),
   portalNewTask: document.querySelector("#portal-new-task"),
   portalSummary: document.querySelector("#portal-summary"),
@@ -506,6 +522,10 @@ const els = {
   periodModes: document.querySelectorAll("[data-period-mode]"),
   invoiceSummary: document.querySelector("#invoice-summary"),
   payrollSummary: document.querySelector("#payroll-summary"),
+  reportSearch: document.querySelector("#report-search"),
+  reportShowFavorites: document.querySelector("#report-show-favorites"),
+  reportTags: document.querySelector("#report-tags"),
+  reportCatalog: document.querySelector("#report-catalog"),
   employeeList: document.querySelector("#employee-list"),
   userList: document.querySelector("#user-list"),
   accountRequestList: document.querySelector("#account-request-list"),
@@ -2681,7 +2701,140 @@ function renderAnalysis() {
   `;
 }
 
+function renderTimePeriodOverview() {
+  if (!els.timePeriodSummary || !els.timePeriodBoard) return;
+  const entries = state.entries.filter(isEntryVisible);
+  const receipts = state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId) || {}));
+  const travels = state.travels.filter((travel) => isClientVisible(getClient(travel.clientId) || {}));
+  const employees = [...new Set([
+    ...entries.map((entry) => entry.employee || getCurrentUser().name),
+    ...state.users.filter((user) => user.role !== "customer").map((user) => user.name)
+  ])].filter(Boolean);
+
+  const rows = employees.map((employee) => {
+    const employeeEntries = entries.filter((entry) => (entry.employee || getCurrentUser().name) === employee);
+    const submittedReceipts = receipts.filter((receipt) => (receipt.employee || getCurrentUser().name) === employee && receipt.status === "submitted").length;
+    const submittedTravels = travels.filter((travel) => (travel.employee || getCurrentUser().name) === employee && travel.status === "submitted").length;
+    const reported = sumHours(employeeEntries);
+    const absence = sumHours(employeeEntries.filter((entry) => entry.type === "absence"));
+    const scheduled = employeeEntries.length ? employeeEntries.reduce((total, entry) => total + Number(entry.scheduledHours || 8), 0) : 40;
+    const billable = sumHours(employeeEntries.filter((entry) => entry.billable));
+    const submitted = employeeEntries.filter((entry) => entry.status === "submitted").length + submittedReceipts + submittedTravels;
+    const approved = employeeEntries.filter((entry) => isInvoiceReady(entry.status) || entry.status === "invoiced").length;
+    const status = submitted ? "Väntar attest" : approved ? "Attesterad" : reported ? "Utkast" : "Ej påbörjad";
+    return {
+      employee,
+      reported,
+      absence,
+      scheduled,
+      deviation: reported - scheduled,
+      billable,
+      submitted,
+      status
+    };
+  }).sort((a, b) => b.submitted - a.submitted || b.reported - a.reported);
+
+  const totalReported = rows.reduce((sum, row) => sum + row.reported, 0);
+  const totalBillable = rows.reduce((sum, row) => sum + row.billable, 0);
+  const totalScheduled = rows.reduce((sum, row) => sum + row.scheduled, 0);
+  const waitingCount = rows.reduce((sum, row) => sum + row.submitted, 0);
+
+  els.timePeriodSummary.innerHTML = `
+    <div><span>Rapporterat</span><strong>${formatHours(totalReported)}</strong></div>
+    <div><span>Schemalagt</span><strong>${formatHours(totalScheduled)}</strong></div>
+    <div><span>Avvikelse</span><strong>${formatHours(totalReported - totalScheduled)}</strong></div>
+    <div><span>Debiterbart</span><strong>${formatHours(totalBillable)}</strong></div>
+    <div><span>Väntar attest</span><strong>${waitingCount}</strong></div>
+  `;
+
+  if (!rows.length) {
+    els.timePeriodBoard.innerHTML = `<tr><td colspan="7">${els.emptyTemplate.innerHTML}</td></tr>`;
+    return;
+  }
+
+  els.timePeriodBoard.innerHTML = rows.map((row) => `
+    <tr>
+      <td>
+        <button class="link-button" type="button" data-time-employee="${escapeHtml(row.employee)}">${escapeHtml(row.employee)}</button>
+      </td>
+      <td>${formatHours(row.reported)}</td>
+      <td>${formatHours(row.absence)}</td>
+      <td>${formatHours(row.scheduled)}</td>
+      <td class="${row.deviation < 0 ? "danger-text" : ""}">${formatHours(row.deviation)}</td>
+      <td>${formatHours(row.billable)}</td>
+      <td>
+        <span class="badge ${row.submitted ? "submitted" : row.status === "Attesterad" ? "approved" : "draft"}">${escapeHtml(row.status)}</span>
+        ${row.submitted ? `<button class="ghost-button small-button" type="button" data-time-approve-employee="${escapeHtml(row.employee)}">Attestera</button>` : ""}
+      </td>
+    </tr>
+  `).join("");
+}
+
+function renderInvoiceCommandStrip() {
+  if (!els.invoiceCommandStrip) return;
+  const rows = getInvoiceRows();
+  const readyRows = rows.filter((row) => row.total > 0 && !row.warning && state.projects.some((project) => project.id === row.id));
+  const warningRows = rows.filter((row) => row.warning > 0);
+  const draftRows = state.projects.filter((project) => project.invoiceStatus === "draft");
+  const invoiceTotal = rows.reduce((sum, row) => sum + row.total, 0);
+
+  els.invoiceCommandStrip.innerHTML = `
+    <button class="invoice-command-card" type="button" data-invoice-command="create-ready">
+      <span>Skapa klara underlag</span>
+      <strong>${readyRows.length}</strong>
+      <small>${formatCurrency(readyRows.reduce((sum, row) => sum + row.total, 0))}</small>
+    </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="drafts">
+      <span>Utkast</span>
+      <strong>${draftRows.length}</strong>
+      <small>Kan granskas före utskick</small>
+    </button>
+    <button class="invoice-command-card warning" type="button" data-invoice-command="warnings">
+      <span>Behöver åtgärd</span>
+      <strong>${warningRows.length}</strong>
+      <small>Ej attesterad tid/kvitton</small>
+    </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="history">
+      <span>Fakturaunderlag</span>
+      <strong>${formatCurrency(invoiceTotal)}</strong>
+      <small>Öppna arkiv och status</small>
+    </button>
+  `;
+}
+
+function renderReportCatalog() {
+  if (!els.reportTags || !els.reportCatalog) return;
+  const query = (els.reportSearch?.value || "").trim().toLowerCase();
+  const favoritesOnly = els.reportShowFavorites?.classList.contains("active");
+  const tags = [...new Set(reportDefinitions.map((report) => report.tag))];
+  const reports = reportDefinitions.filter((report) => {
+    const haystack = `${report.title} ${report.tag} ${report.description}`.toLowerCase();
+    return (!query || haystack.includes(query)) && (!favoritesOnly || report.favorite);
+  });
+
+  els.reportTags.innerHTML = tags.map((tag) => `
+    <button class="tag-button" type="button" data-report-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>
+  `).join("");
+
+  if (!reports.length) {
+    renderEmpty(els.reportCatalog);
+    return;
+  }
+
+  els.reportCatalog.innerHTML = reports.map((report) => `
+    <button class="analysis-card report-card" type="button" data-report-open="${escapeHtml(report.view)}" data-report-id="${escapeHtml(report.id)}">
+      <span class="analysis-icon">${escapeHtml(report.tag.slice(0, 2).toUpperCase())}</span>
+      <div>
+        <strong>${escapeHtml(report.title)}</strong>
+        <p>${escapeHtml(report.description)}</p>
+      </div>
+      <b>${report.favorite ? "Favorit" : escapeHtml(report.tag)}</b>
+    </button>
+  `).join("");
+}
+
 function renderReports() {
+  renderReportCatalog();
   const visibleEntriesForReports = state.entries.filter(isEntryVisible);
   const totalHours = sumHours(visibleEntriesForReports);
   const billableHours = sumHours(visibleEntriesForReports.filter((entry) => entry.billable));
@@ -4516,6 +4669,7 @@ function renderAll() {
   renderDashboard();
   renderTasks();
   renderEntriesTable();
+  renderTimePeriodOverview();
   renderClients();
   renderSales();
   renderProjects();
@@ -4524,6 +4678,7 @@ function renderAll() {
   renderAgreements();
   renderEsignatures();
   renderInvoiceWorkbench();
+  renderInvoiceCommandStrip();
   renderPlanning();
   renderAnalysis();
   renderPortal();
@@ -5141,6 +5296,139 @@ els.analysisCards?.addEventListener("click", (event) => {
   if (!button) return;
   setView(button.dataset.analysisView);
   showToast("Öppnade analysens arbetsunderlag.");
+});
+
+function approveSubmittedForEmployee(employee) {
+  let count = 0;
+  state.entries.forEach((entry) => {
+    if ((entry.employee || getCurrentUser().name) === employee && entry.status === "submitted") {
+      entry.status = "approved";
+      entry.reviewNote = "";
+      count += 1;
+    }
+  });
+  state.receipts.forEach((receipt) => {
+    if ((receipt.employee || getCurrentUser().name) === employee && receipt.status === "submitted") {
+      receipt.status = "approved";
+      receipt.reviewNote = "";
+      count += 1;
+    }
+  });
+  state.travels.forEach((travel) => {
+    if ((travel.employee || getCurrentUser().name) === employee && travel.status === "submitted") {
+      travel.status = "approved";
+      travel.reviewNote = "";
+      count += 1;
+    }
+  });
+  return count;
+}
+
+els.timePeriodBoard?.addEventListener("click", (event) => {
+  const employeeButton = event.target.closest("[data-time-employee]");
+  const approveButton = event.target.closest("[data-time-approve-employee]");
+
+  if (approveButton) {
+    const count = approveSubmittedForEmployee(approveButton.dataset.timeApproveEmployee);
+    if (!count) {
+      showToast("Det fanns inget inskickat att attestera för medarbetaren.", "warning");
+      return;
+    }
+    saveState();
+    renderAll();
+    showToast(`${count} poster attesterades.`);
+    return;
+  }
+
+  if (employeeButton) {
+    els.entryEmployee.value = employeeButton.dataset.timeEmployee;
+    els.entriesTable?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast(`Tidtabellen filtreras visuellt via medarbetaren ${employeeButton.dataset.timeEmployee} i nästa byggsteg.`);
+  }
+});
+
+els.timeExpandBlocks?.addEventListener("click", () => {
+  els.timePeriodBoard?.classList.toggle("expanded");
+  showToast(els.timePeriodBoard?.classList.contains("expanded") ? "Alla tidsblock expanderades." : "Tidsblocken komprimerades.");
+});
+
+els.timeAttestMonth?.addEventListener("click", () => {
+  const employees = [...new Set(state.entries.filter(isEntryVisible).map((entry) => entry.employee || getCurrentUser().name))];
+  const count = employees.reduce((sum, employee) => sum + approveSubmittedForEmployee(employee), 0);
+  if (!count) {
+    showToast("Det finns inga inskickade poster att attestera i perioden.", "warning");
+    return;
+  }
+  saveState();
+  renderAll();
+  showToast(`${count} poster attesterades för perioden.`);
+});
+
+els.invoiceCommandStrip?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-invoice-command]");
+  if (!button) return;
+  const command = button.dataset.invoiceCommand;
+
+  if (command === "history") {
+    els.invoiceHistoryTable?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast("Fakturaunderlag och arkiv visas längre ned.");
+    return;
+  }
+
+  if (command === "warnings") {
+    setView("reports");
+    showToast("Öppnade attestflödet så att spärrade fakturarader kan åtgärdas.");
+    return;
+  }
+
+  if (command === "drafts") {
+    els.invoiceTabs.forEach((item) => item.classList.toggle("active", item.dataset.invoiceTab === "draft"));
+    renderInvoiceWorkbench();
+    renderInvoiceCommandStrip();
+    showToast("Visar fakturautkast.");
+    return;
+  }
+
+  if (command === "create-ready") {
+    const rows = getInvoiceRows().filter((row) => row.total > 0 && !row.warning);
+    const created = rows.reduce((count, row) => {
+      const project = state.projects.find((item) => item.id === row.id);
+      if (!project) return count;
+      const record = createInvoiceRecord(project);
+      if (!record) return count;
+      project.invoiceStatus = "created";
+      markProjectItemsInvoiced(project);
+      return count + 1;
+    }, 0);
+    if (!created) {
+      showToast("Det finns inga helt klara underlag att skapa just nu.", "warning");
+      return;
+    }
+    saveState();
+    renderAll();
+    showToast(`${created} fakturaunderlag skapades.`);
+  }
+});
+
+els.reportSearch?.addEventListener("input", renderReportCatalog);
+
+els.reportShowFavorites?.addEventListener("click", () => {
+  els.reportShowFavorites.classList.toggle("active");
+  renderReportCatalog();
+});
+
+els.reportTags?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-report-tag]");
+  if (!button || !els.reportSearch) return;
+  els.reportSearch.value = button.dataset.reportTag;
+  renderReportCatalog();
+});
+
+els.reportCatalog?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-report-open]");
+  if (!button) return;
+  setView(button.dataset.reportOpen);
+  showToast("Rapportens arbetsvy öppnades.");
 });
 
 els.shortcuts.forEach((button) => {

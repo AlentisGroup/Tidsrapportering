@@ -2152,6 +2152,118 @@ th {
   grid-template-columns: 1fr;
 }
 
+.monthly-register-panel {
+  gap: 16px;
+}
+
+.period-table {
+  min-width: 840px;
+}
+
+.period-table td:last-child {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.period-table tbody.expanded tr {
+  background: #fbf8ff;
+}
+
+.link-button {
+  background: transparent;
+  border: 0;
+  color: var(--purple);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+  text-align: left;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.danger-text {
+  color: #c33434;
+}
+
+.invoice-command-strip {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+  margin-bottom: 18px;
+}
+
+.invoice-command-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 5px;
+  min-height: 92px;
+  padding: 14px;
+  text-align: left;
+}
+
+.invoice-command-card:hover,
+.tag-button:hover,
+.report-card:hover {
+  border-color: rgba(108, 62, 184, 0.28);
+  box-shadow: 0 12px 30px rgba(33, 25, 56, 0.08);
+}
+
+.invoice-command-card span,
+.invoice-command-card small {
+  color: var(--muted);
+}
+
+.invoice-command-card strong {
+  color: var(--ink);
+  font-size: 1.18rem;
+}
+
+.invoice-command-card.warning strong {
+  color: #c66a18;
+}
+
+.report-catalog-panel {
+  margin-bottom: 18px;
+}
+
+.report-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.tag-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(108, 62, 184, 0.24);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--purple);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.report-card-grid {
+  align-items: stretch;
+}
+
+.report-card b {
+  color: var(--teal-dark);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .compact-empty {
   min-height: 72px;
   padding: 10px;
@@ -2207,7 +2319,8 @@ th {
   .client-detail-grid,
   .quick-register-grid,
   .sales-board,
-  .analysis-grid {
+  .analysis-grid,
+  .invoice-command-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2278,7 +2391,8 @@ th {
   .client-meta,
   .portal-metrics,
   .sales-board,
-  .analysis-grid {
+  .analysis-grid,
+  .invoice-command-strip {
     grid-template-columns: 1fr;
   }
 

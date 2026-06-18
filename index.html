@@ -412,6 +412,37 @@
           </div>
         </section>
 
+        <section class="panel monthly-register-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Månadsregistrering</p>
+              <h2>Rapporterat, schema, avvikelse och debiterbart</h2>
+            </div>
+            <div class="top-actions">
+              <button class="ghost-button small-button" id="time-expand-blocks" type="button">Expandera tidsblock</button>
+              <button class="primary-button small-button" id="time-attest-month" type="button">Attestera månad</button>
+            </div>
+          </div>
+          <div class="client-detail-metrics portal-metrics" id="time-period-summary"></div>
+          <div class="table-wrap">
+            <table class="period-table">
+              <thead>
+                <tr>
+                  <th>Rapportör</th>
+                  <th>RAPP</th>
+                  <th>FRV</th>
+                  <th>SCH</th>
+                  <th>AVV</th>
+                  <th>DEB</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="time-period-board"></tbody>
+            </table>
+          </div>
+        </section>
+
         <div class="time-layout">
           <section class="panel timer-panel">
             <div class="section-heading">
@@ -1071,6 +1102,8 @@
             </button>
           </div>
 
+          <div class="invoice-command-strip" id="invoice-command-strip"></div>
+
           <div class="table-wrap">
             <table class="invoice-table">
               <thead>
@@ -1198,6 +1231,21 @@
       </section>
 
       <section class="view" id="reports-view" aria-labelledby="page-title">
+        <section class="panel report-catalog-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Rapportkatalog</p>
+              <h2>Hitta rapport eller export</h2>
+            </div>
+            <div class="filter-row">
+              <input id="report-search" type="search" placeholder="Sök på rapportnamn, kod eller beskrivning">
+              <button class="ghost-button small-button" id="report-show-favorites" type="button">Mina favoriter</button>
+            </div>
+          </div>
+          <div class="report-tags" id="report-tags"></div>
+          <div class="analysis-grid report-card-grid" id="report-catalog"></div>
+        </section>
+
         <div class="report-layout">
           <section class="panel">
             <div class="section-heading">
