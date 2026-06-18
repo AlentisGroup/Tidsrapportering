@@ -304,12 +304,16 @@ let selectedProjectId = state.projects[0]?.id || "";
 
 const viewTitles = {
   dashboard: "Start",
+  tasks: "Uppgifter",
   time: "Tidsrapportering",
   clients: "Kunder",
+  sales: "Affärsmöjligheter",
   projects: "Projekt",
   agreements: "Avtal",
   esign: "E-signeringar",
   invoice: "Att fakturera",
+  planning: "Resursplanering",
+  analysis: "Analys",
   portal: "Kundportal",
   reports: "Rapporter"
 };
@@ -322,9 +326,9 @@ const roleLabels = {
 };
 
 const roleAccess = {
-  admin: ["dashboard", "time", "clients", "projects", "agreements", "esign", "invoice", "portal", "reports"],
-  owner: ["dashboard", "time", "clients", "projects", "agreements", "esign", "invoice", "portal", "reports"],
-  employee: ["dashboard", "time", "reports"],
+  admin: ["dashboard", "tasks", "time", "clients", "sales", "projects", "agreements", "esign", "invoice", "planning", "analysis", "portal", "reports"],
+  owner: ["dashboard", "tasks", "time", "clients", "sales", "projects", "agreements", "esign", "invoice", "planning", "analysis", "portal", "reports"],
+  employee: ["dashboard", "tasks", "time", "planning", "analysis", "reports"],
   customer: ["portal"]
 };
 
@@ -362,6 +366,19 @@ const els = {
   resourceHours: document.querySelector("#resource-hours"),
   clientChart: document.querySelector("#client-chart"),
   recentActivity: document.querySelector("#recent-activity"),
+  tasksSummary: document.querySelector("#tasks-summary"),
+  tasksBoard: document.querySelector("#tasks-board"),
+  tasksPipeline: document.querySelector("#tasks-pipeline"),
+  taskNewButton: document.querySelector("#task-new-button"),
+  salesSummary: document.querySelector("#sales-summary"),
+  salesBoard: document.querySelector("#sales-board"),
+  salesActions: document.querySelector("#sales-actions"),
+  salesNewButton: document.querySelector("#sales-new-button"),
+  planningSummary: document.querySelector("#planning-summary"),
+  planningBoard: document.querySelector("#planning-board"),
+  planningModes: document.querySelectorAll("[data-planning-mode]"),
+  analysisCards: document.querySelector("#analysis-cards"),
+  analysisSummary: document.querySelector("#analysis-summary"),
   timerDisplay: document.querySelector("#timer-display"),
   timerStatus: document.querySelector("#timer-status"),
   timerType: document.querySelector("#timer-type"),
@@ -912,6 +929,13 @@ function getWorkflowBadgeClass(kind, status) {
   if (kind === "agreement") return getAgreementBadgeClass(status);
   if (kind === "esign") return getEsignBadgeClass(status);
   if (kind === "invoice") return getInvoiceStatusBadge(status);
+  if (kind === "portal") return {
+    open: "draft",
+    waiting: "submitted",
+    submitted: "submitted",
+    done: "approved",
+    rejected: "rejected"
+  }[status] || "draft";
   return "draft";
 }
 
@@ -920,6 +944,13 @@ function getWorkflowStatusLabel(kind, status) {
   if (kind === "agreement") return getAgreementStatusLabel(status);
   if (kind === "esign") return getEsignStatusLabel(status);
   if (kind === "invoice") return getInvoiceStatusLabel(status);
+  if (kind === "portal") return {
+    open: "Öppen",
+    waiting: "Väntar på kund",
+    submitted: "Inskickad",
+    done: "Klar",
+    rejected: "Avvisad"
+  }[status] || "Öppen";
   return "Utkast";
 }
 
@@ -2422,6 +2453,232 @@ function handlePortalInvoiceAction(action, invoiceId) {
 
   saveState();
   renderAll();
+}
+
+function getTaskWorkflowItems() {
+  const portalItems = (state.portalTasks || [])
+    .filter((task) => isClientVisible(getClient(task.clientId)))
+    .map((task) => ({
+      id: task.id,
+      kind: "portal",
+      title: task.title,
+      subtitle: `${getClient(task.clientId)?.name || "Okänd kund"} · ${task.type || "Uppgift"}`,
+      owner: task.owner || "Ej satt",
+      dueDate: task.dueDate || "",
+      status: task.status || "open",
+      message: task.message || "",
+      actionLabel: "Öppna portal",
+      view: "portal"
+    }));
+
+  const approvalItems = getApprovalItems({ includeApproved: false })
+    .filter((item) => ["entry", "receipt", "travel"].includes(item.kind))
+    .map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      title: item.title,
+      subtitle: item.subtitle,
+      owner: item.owner || getCurrentUser().name,
+      dueDate: item.date || "",
+      status: item.status || "draft",
+      message: item.value,
+      actionLabel: item.status === "submitted" ? "Attestera" : "Öppna tid",
+      view: "time"
+    }));
+
+  return [...portalItems, ...approvalItems].sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"));
+}
+
+function renderTasks() {
+  if (!els.tasksSummary || !els.tasksBoard || !els.tasksPipeline) return;
+  const tasks = getTaskWorkflowItems();
+  const openTasks = tasks.filter((task) => !["done", "approved", "signed", "paid", "invoiced"].includes(task.status));
+  const lateTasks = openTasks.filter((task) => task.dueDate && task.dueDate < isoToday);
+  const waitingTasks = tasks.filter((task) => ["waiting", "submitted"].includes(task.status));
+
+  els.tasksSummary.innerHTML = `
+    <div><span>Öppna</span><strong>${openTasks.length}</strong></div>
+    <div><span>Väntar på kund/attest</span><strong>${waitingTasks.length}</strong></div>
+    <div><span>Försenade</span><strong>${lateTasks.length}</strong></div>
+    <div><span>Klart senaste flödet</span><strong>${tasks.filter((task) => ["done", "approved"].includes(task.status)).length}</strong></div>
+  `;
+
+  if (!tasks.length) {
+    renderEmpty(els.tasksBoard);
+  } else {
+    els.tasksBoard.innerHTML = tasks.map((task) => `
+      <div class="workflow-card">
+        <div>
+          <div class="approval-title">
+            <strong>${escapeHtml(task.title)}</strong>
+            <span class="badge ${getWorkflowBadgeClass(task.kind === "portal" ? "portal" : task.kind, task.status)}">${escapeHtml(getWorkflowStatusLabel(task.kind === "portal" ? "portal" : task.kind, task.status))}</span>
+          </div>
+          <span>${escapeHtml(task.subtitle)} · ansvarig ${escapeHtml(task.owner)} · ${task.dueDate || "inget datum"}</span>
+          ${task.message ? `<small class="review-note">${escapeHtml(task.message)}</small>` : ""}
+        </div>
+        <button class="ghost-button small-button" type="button" data-task-open="${task.view}" data-task-kind="${task.kind}" data-task-id="${task.id}">${escapeHtml(task.actionLabel)}</button>
+      </div>
+    `).join("");
+  }
+
+  const pipeline = [
+    ["open", "Öppen"],
+    ["waiting", "Väntar"],
+    ["submitted", "Skickad"],
+    ["done", "Klar"]
+  ];
+  els.tasksPipeline.innerHTML = pipeline.map(([status, label]) => {
+    const count = tasks.filter((task) => task.status === status).length;
+    return `
+      <div class="pipeline-row">
+        <span>${label}</span>
+        <strong>${count}</strong>
+      </div>
+    `;
+  }).join("");
+}
+
+function getSalesRows() {
+  return state.clients.filter(isClientVisible).map((client) => {
+    const snapshot = getClientSnapshot(client.id);
+    const openAgreements = snapshot.agreements.filter((agreement) => agreement.status !== "signed" && agreement.status !== "archived").length;
+    const wonAgreements = snapshot.agreements.filter((agreement) => agreement.status === "signed").length;
+    const value = snapshot.invoiceValue + snapshot.projects.reduce((sum, project) => sum + Number(project.fixedPrice || 0), 0);
+    const stage = wonAgreements ? "won" : openAgreements ? "offer" : snapshot.projects.length ? "active" : "lead";
+    return { client, snapshot, value, stage };
+  }).sort((a, b) => b.value - a.value);
+}
+
+function renderSales() {
+  if (!els.salesSummary || !els.salesBoard || !els.salesActions) return;
+  const rows = getSalesRows();
+  const totalValue = rows.reduce((sum, row) => sum + row.value, 0);
+  const openOffers = state.agreements.filter((agreement) => agreement.status === "sent" && isClientVisible(getClient(agreement.clientId))).length;
+  const signed = state.agreements.filter((agreement) => agreement.status === "signed" && isClientVisible(getClient(agreement.clientId))).length;
+
+  els.salesSummary.innerHTML = `
+    <div><span>Pipeline</span><strong>${formatCurrency(totalValue)}</strong></div>
+    <div><span>Öppna offerter/avtal</span><strong>${openOffers}</strong></div>
+    <div><span>Vunna avtal</span><strong>${signed}</strong></div>
+    <div><span>Kunder i flöde</span><strong>${rows.length}</strong></div>
+  `;
+
+  const columns = [
+    ["lead", "Prospekt"],
+    ["active", "Pågående uppdrag"],
+    ["offer", "Offert/avtal ute"],
+    ["won", "Vunnet"]
+  ];
+  els.salesBoard.innerHTML = columns.map(([stage, title]) => {
+    const items = rows.filter((row) => row.stage === stage);
+    return `
+      <section class="sales-column">
+        <h3>${title}</h3>
+        ${items.length ? items.map((row) => `
+          <button class="sales-card" type="button" data-sales-client="${row.client.id}">
+            <strong>${escapeHtml(row.client.name)}</strong>
+            <span>${row.snapshot.projects.length} projekt · ${row.snapshot.agreements.length} avtal · ${formatCurrency(row.value)}</span>
+          </button>
+        `).join("") : `<div class="empty-state compact-empty"><span>Inga poster</span></div>`}
+      </section>
+    `;
+  }).join("");
+
+  const nextActions = rows.slice(0, 4).map((row) => ({
+    client: row.client,
+    label: row.stage === "lead" ? "Skapa offert" : row.stage === "offer" ? "Följ upp signering" : "Öppna kundkort",
+    view: row.stage === "offer" ? "agreements" : "clients"
+  }));
+  els.salesActions.innerHTML = nextActions.map((item) => `
+    <div class="employee-item">
+      <div>
+        <strong>${escapeHtml(item.client.name)}</strong>
+        <span>${escapeHtml(item.label)}</span>
+      </div>
+      <button class="ghost-button small-button" type="button" data-sales-action="${item.view}" data-sales-client="${item.client.id}">Öppna</button>
+    </div>
+  `).join("");
+}
+
+function renderPlanning() {
+  if (!els.planningSummary || !els.planningBoard) return;
+  const projects = state.projects.filter(isProjectVisible);
+  const rows = projects.map((project) => {
+    const entries = state.entries.filter((entry) => isEntryVisible(entry) && (entry.projectId === project.id || entry.workOrder === project.name));
+    const reported = sumHours(entries);
+    const budget = Number(project.budget || 0);
+    const planned = Math.max(budget - reported, 0);
+    return { project, client: getClient(project.clientId), reported, budget, planned };
+  });
+  const totalBudget = rows.reduce((sum, row) => sum + row.budget, 0);
+  const totalReported = rows.reduce((sum, row) => sum + row.reported, 0);
+  const utilization = totalBudget ? Math.min(100, Math.round((totalReported / totalBudget) * 100)) : 0;
+
+  els.planningSummary.innerHTML = `
+    <div><span>Budget</span><strong>${formatHours(totalBudget)}</strong></div>
+    <div><span>Rapporterat</span><strong>${formatHours(totalReported)}</strong></div>
+    <div><span>Kvar att planera</span><strong>${formatHours(Math.max(totalBudget - totalReported, 0))}</strong></div>
+    <div><span>Beläggning</span><strong>${utilization}%</strong></div>
+  `;
+
+  if (!rows.length) {
+    renderEmpty(els.planningBoard);
+    return;
+  }
+
+  els.planningBoard.innerHTML = rows.map((row) => {
+    const percent = row.budget ? Math.min(100, Math.round((row.reported / row.budget) * 100)) : 0;
+    return `
+      <div class="planning-row">
+        <div>
+          <strong>${escapeHtml(row.project.name)}</strong>
+          <span>${escapeHtml(row.client?.name || "Intern")} · ${escapeHtml(getProjectStatusLabel(row.project.status))}</span>
+        </div>
+        <div class="planning-bar" aria-label="${percent}% rapporterat">
+          <span style="width:${percent}%"></span>
+        </div>
+        <strong>${formatHours(row.reported)} / ${formatHours(row.budget)}</strong>
+        <button class="mini-button" type="button" data-planning-project="${row.project.id}" aria-label="Öppna projekt">
+          <svg viewBox="0 0 24 24"><path d="M7 7h10v10H7zM14 7h3v3"></path></svg>
+        </button>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderAnalysis() {
+  if (!els.analysisCards || !els.analysisSummary) return;
+  const entries = state.entries.filter(isEntryVisible);
+  const total = sumHours(entries);
+  const billable = sumHours(entries.filter((entry) => entry.billable));
+  const internal = sumHours(entries.filter((entry) => entry.type === "internal"));
+  const absence = sumHours(entries.filter((entry) => entry.type === "absence"));
+  const approved = sumHours(entries.filter((entry) => isInvoiceReady(entry.status) || entry.status === "invoiced"));
+  const rate = total ? Math.round((billable / total) * 100) : 0;
+  const cards = [
+    { key: "reported", title: "Uppföljning av arbetad och debiterbar tid", text: "Fördela timmar på kund, projekt, aktivitet och medarbetare.", value: `${formatHours(billable)} debiterbart`, view: "reports" },
+    { key: "keyfigures", title: "Uppföljning av nyckeltal", text: "Följ debiteringsgrad, attestgrad och fakturerbar kapacitet över perioden.", value: `${rate}% debiteringsgrad`, view: "reports" },
+    { key: "absence", title: "Frånvaro", text: "Se frånvaro per medarbetare och period för löneunderlag.", value: formatHours(absence), view: "time" },
+    { key: "internal", title: "Interntid", text: "Följ intern administration, möten och byrådrift.", value: formatHours(internal), view: "time" }
+  ];
+
+  els.analysisCards.innerHTML = cards.map((card) => `
+    <button class="analysis-card" type="button" data-analysis-view="${card.view}">
+      <span class="analysis-icon">${escapeHtml(card.key.slice(0, 2).toUpperCase())}</span>
+      <div>
+        <strong>${escapeHtml(card.title)}</strong>
+        <p>${escapeHtml(card.text)}</p>
+      </div>
+      <b>${escapeHtml(card.value)}</b>
+    </button>
+  `).join("");
+
+  els.analysisSummary.innerHTML = `
+    <div><span>Totalt rapporterat</span><strong>${formatHours(total)}</strong></div>
+    <div><span>Attesterat</span><strong>${formatHours(approved)}</strong></div>
+    <div><span>Debiterbart</span><strong>${formatHours(billable)}</strong></div>
+    <div><span>Ej debiterbart</span><strong>${formatHours(Math.max(total - billable, 0))}</strong></div>
+  `;
 }
 
 function renderReports() {
@@ -4257,14 +4514,18 @@ function renderAll() {
   renderShortcuts();
   renderClientOptions();
   renderDashboard();
+  renderTasks();
   renderEntriesTable();
   renderClients();
+  renderSales();
   renderProjects();
   renderReceipts();
   renderTravels();
   renderAgreements();
   renderEsignatures();
   renderInvoiceWorkbench();
+  renderPlanning();
+  renderAnalysis();
   renderPortal();
   renderReports();
 }
@@ -4797,6 +5058,89 @@ els.navItems.forEach((button) => {
 
 els.moduleItems.forEach((button) => {
   button.addEventListener("click", () => openModule(button.dataset.module, button));
+});
+
+els.taskNewButton?.addEventListener("click", () => {
+  setView("portal");
+  createPortalTaskForCurrentClient();
+});
+
+els.tasksBoard?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-task-open]");
+  if (!button) return;
+  if (button.dataset.taskOpen === "portal") {
+    const task = (state.portalTasks || []).find((item) => item.id === button.dataset.taskId);
+    if (task && els.portalClient) els.portalClient.value = task.clientId;
+    setView("portal");
+    renderPortal();
+    showToast("Öppnade kundärendet.");
+    return;
+  }
+  setView(button.dataset.taskOpen || "time");
+  showToast("Öppnade arbetsflödet för uppgiften.");
+});
+
+els.salesNewButton?.addEventListener("click", () => {
+  const client = state.clients.find(isClientVisible);
+  if (client) {
+    els.agreementClient.value = client.id;
+    els.agreementEmail.value = client.billingEmail || client.email || "";
+    els.agreementTitle.value = `Offert till ${client.name}`;
+    els.agreementType.value = "Uppdragsavtal";
+    els.agreementMessage.value = "Hej, här kommer ett förslag på uppdrag för ert godkännande.";
+  }
+  setView("agreements");
+  focusElement(els.agreementTitle);
+  showToast("Ny offert förbereds som avtal/uppdragsbrev.");
+});
+
+els.salesBoard?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-sales-client]");
+  if (!button) return;
+  selectedClientId = button.dataset.salesClient;
+  setView("clients");
+  renderClients();
+  showToast("Öppnade kundkort från säljtavlan.");
+});
+
+els.salesActions?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-sales-action]");
+  if (!button) return;
+  selectedClientId = button.dataset.salesClient;
+  if (button.dataset.salesAction === "agreements") {
+    els.agreementSearch.value = getClient(selectedClientId)?.name || "";
+    setView("agreements");
+    renderAgreements();
+    showToast("Visar avtal och offerter för kunden.");
+    return;
+  }
+  setView("clients");
+  renderClients();
+});
+
+els.planningModes?.forEach((button) => {
+  button.addEventListener("click", () => {
+    els.planningModes.forEach((item) => item.classList.remove("active"));
+    button.classList.add("active");
+    renderPlanning();
+    showToast(`Planering visas per ${button.dataset.planningMode === "month" ? "månad" : "vecka"}.`);
+  });
+});
+
+els.planningBoard?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-planning-project]");
+  if (!button) return;
+  selectedProjectId = button.dataset.planningProject;
+  setView("projects");
+  renderProjects();
+  showToast("Öppnade projekt från resursplaneringen.");
+});
+
+els.analysisCards?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-analysis-view]");
+  if (!button) return;
+  setView(button.dataset.analysisView);
+  showToast("Öppnade analysens arbetsunderlag.");
 });
 
 els.shortcuts.forEach((button) => {

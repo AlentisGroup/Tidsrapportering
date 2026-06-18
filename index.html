@@ -43,7 +43,7 @@
           </span>
           <span>Start</span>
         </button>
-        <button class="nav-item" data-module="tasks" type="button">
+        <button class="nav-item" data-view="tasks" type="button">
           <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 11 2 2 4-4M5 4h14v16H5z"></path></svg></span>
           <span>Uppgifter</span>
         </button>
@@ -51,7 +51,7 @@
           <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-8 0M4 21a8 8 0 0 1 16 0M19 8h2M20 7v2"></path></svg></span>
           <span>Kontakter</span>
         </button>
-        <button class="nav-item" data-module="sales" type="button">
+        <button class="nav-item" data-view="sales" type="button">
           <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M17 7.5a4 4 0 0 0-5-2.4c-2.4.8-2.7 3.9-.4 4.8l1.8.7c2.7 1 2.1 4.9-.7 5.4A4.7 4.7 0 0 1 7 13.8"></path></svg></span>
           <span>Affärsmöjligheter</span>
         </button>
@@ -73,7 +73,7 @@
           </span>
           <span>Tid & kvitton</span>
         </button>
-        <button class="nav-item" data-module="planning" type="button">
+        <button class="nav-item" data-view="planning" type="button">
           <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V5M9 19V9M14 19v-6M19 19V7"></path></svg></span>
           <span>Resursplanering</span>
         </button>
@@ -87,7 +87,7 @@
           </span>
           <span>Rapporter</span>
         </button>
-        <button class="nav-item" data-module="analysis" type="button">
+        <button class="nav-item" data-view="analysis" type="button">
           <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 19h18M7 16l3-4 3 2 4-7"></path></svg></span>
           <span>Analys</span>
         </button>
@@ -276,6 +276,102 @@
               <div class="activity-list" id="recent-activity"></div>
             </section>
           </aside>
+        </div>
+      </section>
+
+      <section class="view" id="tasks-view" aria-labelledby="page-title">
+        <div class="report-layout">
+          <section class="panel wide-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Uppgifter</p>
+                <h2>Mina uppgifter och kundärenden</h2>
+              </div>
+              <div class="top-actions">
+                <button class="ghost-button small-button" data-task-filter="all" type="button">Alla</button>
+                <button class="primary-button small-button" id="task-new-button" type="button">Ny uppgift</button>
+              </div>
+            </div>
+            <div class="client-detail-metrics portal-metrics" id="tasks-summary"></div>
+            <div class="activity-list workflow-list" id="tasks-board"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="eyebrow">Tavla</p>
+                <h2>Status</h2>
+              </div>
+            </div>
+            <div class="pipeline-list" id="tasks-pipeline"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="sales-view" aria-labelledby="page-title">
+        <div class="report-layout">
+          <section class="panel wide-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Affärsmöjligheter</p>
+                <h2>Säljtavla och offerter</h2>
+              </div>
+              <button class="primary-button small-button" id="sales-new-button" type="button">Ny offert</button>
+            </div>
+            <div class="client-detail-metrics portal-metrics" id="sales-summary"></div>
+            <div class="sales-board" id="sales-board"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="eyebrow">Nästa steg</p>
+                <h2>Affärsflöde</h2>
+              </div>
+            </div>
+            <div class="activity-list" id="sales-actions"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="planning-view" aria-labelledby="page-title">
+        <section class="panel wide-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Resursplanering</p>
+              <h2>Planerad kapacitet per vecka</h2>
+            </div>
+            <div class="segmented-control" aria-label="Planeringsläge">
+              <button class="active" type="button" data-planning-mode="week">Vecka</button>
+              <button type="button" data-planning-mode="month">Månad</button>
+            </div>
+          </div>
+          <div class="client-detail-metrics portal-metrics" id="planning-summary"></div>
+          <div class="planning-board" id="planning-board"></div>
+        </section>
+      </section>
+
+      <section class="view" id="analysis-view" aria-labelledby="page-title">
+        <div class="report-layout">
+          <section class="panel wide-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Analys</p>
+                <h2>Standardanalyser</h2>
+              </div>
+            </div>
+            <div class="analysis-grid" id="analysis-cards"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="eyebrow">Nyckeltal</p>
+                <h2>Period</h2>
+              </div>
+            </div>
+            <div class="client-detail-metrics portal-metrics vertical-metrics" id="analysis-summary"></div>
+          </section>
         </div>
       </section>
 
