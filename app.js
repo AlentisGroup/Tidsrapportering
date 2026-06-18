@@ -747,6 +747,7 @@ async function refreshCloudSession() {
   await loadCloudProfile();
   syncCloudProfileToLocalUser({ silent: true });
   await loadCloudAccountRequests();
+  await loadCloudBusinessData();
   if (canManageCloudAccounts()) renderAll();
   renderCloudStatus();
   return cloudSession;
@@ -766,6 +767,14 @@ async function loadCloudProfile() {
 
 function getSupabaseOrganizationId() {
   return cloudProfile?.organization_id || supabaseConfig.organizationId || null;
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function canUseCloudData() {
+  return Boolean(isSupabaseReady() && cloudSession?.user && cloudProfile?.is_active && getSupabaseOrganizationId());
 }
 
 function canManageCloudAccounts() {
@@ -847,6 +856,206 @@ async function loadCloudAccountRequests() {
   return cloudAccountRequests;
 }
 
+function mapCloudClient(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    org: row.org_number || "",
+    email: row.email || "",
+    billingEmail: row.billing_email || row.email || "",
+    invoiceReference: row.invoice_reference || "",
+    invoiceAddress: row.invoice_address || "",
+    paymentTerms: row.payment_terms ?? "",
+    vatRate: row.vat_rate ?? "",
+    owner: row.owner_name || "",
+    rate: Number(row.rate || 0),
+    cloudSyncedAt: row.created_at || ""
+  };
+}
+
+function mapCloudProject(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    clientId: row.client_id,
+    manager: row.manager_name || "",
+    start: row.starts_on || "",
+    status: row.status || "active",
+    budget: Number(row.budget_hours || 0),
+    fixedPrice: Number(row.fixed_price || 0),
+    invoiceStatus: row.invoice_status || "preliminary",
+    description: row.description || "",
+    checklist: Array.isArray(row.checklist) ? row.checklist : [],
+    cloudSyncedAt: row.created_at || ""
+  };
+}
+
+function toCloudClientRow(client) {
+  return {
+    organization_id: getSupabaseOrganizationId(),
+    name: client.name,
+    org_number: client.org || null,
+    email: client.email || null,
+    billing_email: client.billingEmail || client.email || null,
+    invoice_reference: client.invoiceReference || null,
+    invoice_address: client.invoiceAddress || null,
+    owner_name: client.owner || null,
+    payment_terms: client.paymentTerms === "" ? null : Number(client.paymentTerms || 0),
+    vat_rate: client.vatRate === "" ? null : Number(client.vatRate || 0),
+    rate: Number(client.rate || 0)
+  };
+}
+
+function toCloudProjectRow(project) {
+  return {
+    organization_id: getSupabaseOrganizationId(),
+    client_id: project.clientId,
+    name: project.name,
+    status: project.status || "active",
+    starts_on: project.start || null,
+    budget_hours: Number(project.budget || 0),
+    fixed_price: Number(project.fixedPrice || 0),
+    invoice_status: project.invoiceStatus || "preliminary",
+    description: project.description || null,
+    checklist: project.checklist || []
+  };
+}
+
+function remapClientId(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  state.clients.forEach((client) => {
+    if (client.id === oldId) client.id = newId;
+  });
+  ["entries", "projects", "receipts", "travels", "agreements", "esignatures", "invoices", "portalTasks"].forEach((collection) => {
+    (state[collection] || []).forEach((item) => {
+      if (item.clientId === oldId) item.clientId = newId;
+    });
+  });
+  if (selectedClientId === oldId) selectedClientId = newId;
+}
+
+function remapProjectId(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  state.projects.forEach((project) => {
+    if (project.id === oldId) project.id = newId;
+  });
+  ["entries", "receipts", "agreements", "esignatures", "invoices"].forEach((collection) => {
+    (state[collection] || []).forEach((item) => {
+      if (item.projectId === oldId) item.projectId = newId;
+    });
+  });
+  if (selectedProjectId === oldId) selectedProjectId = newId;
+}
+
+async function loadCloudBusinessData() {
+  if (!canUseCloudData()) return false;
+  const { data: clients, error: clientError } = await supabaseClient
+    .from("clients")
+    .select("id, name, org_number, email, billing_email, invoice_reference, invoice_address, owner_name, payment_terms, vat_rate, rate, created_at")
+    .order("name", { ascending: true });
+  if (clientError) {
+    showToast(`Kunder kunde inte läsas från Supabase: ${clientError.message}`, "warning");
+    return false;
+  }
+
+  const { data: projects, error: projectError } = await supabaseClient
+    .from("projects")
+    .select("id, client_id, name, status, starts_on, budget_hours, fixed_price, invoice_status, description, checklist, created_at")
+    .order("created_at", { ascending: false });
+  if (projectError) {
+    showToast(`Projekt kunde inte läsas från Supabase: ${projectError.message}`, "warning");
+    return false;
+  }
+
+  if (clients?.length) {
+    const internalClient = state.clients.find((client) => client.name === "Intern byrå");
+    state.clients = clients.map(mapCloudClient);
+    if (internalClient && !state.clients.some((client) => client.name === "Intern byrå")) {
+      state.clients.push(internalClient);
+    }
+  }
+  if (projects?.length) state.projects = projects.map(mapCloudProject);
+  saveState();
+  renderAll();
+  return true;
+}
+
+async function saveCloudClient(client) {
+  if (!canUseCloudData()) return null;
+  const payload = toCloudClientRow(client);
+  if (isUuid(client.id)) {
+    const { data, error } = await supabaseClient
+      .from("clients")
+      .update(payload)
+      .eq("id", client.id)
+      .select("id, name, org_number, email, billing_email, invoice_reference, invoice_address, owner_name, payment_terms, vat_rate, rate, created_at")
+      .single();
+    if (error) throw error;
+    return mapCloudClient(data);
+  }
+  const { data, error } = await supabaseClient
+    .from("clients")
+    .insert(payload)
+    .select("id, name, org_number, email, billing_email, invoice_reference, invoice_address, owner_name, payment_terms, vat_rate, rate, created_at")
+    .single();
+  if (error) throw error;
+  return mapCloudClient(data);
+}
+
+async function ensureCloudClient(clientId) {
+  if (isUuid(clientId)) return clientId;
+  const client = getClient(clientId);
+  if (!client) return clientId;
+  const saved = await saveCloudClient(client);
+  if (saved?.id) {
+    const oldId = client.id;
+    Object.assign(client, saved);
+    remapClientId(oldId, saved.id);
+    return saved.id;
+  }
+  return clientId;
+}
+
+async function saveCloudProject(project) {
+  if (!canUseCloudData()) return null;
+  project.clientId = await ensureCloudClient(project.clientId);
+  if (!isUuid(project.clientId)) {
+    throw new Error("Projektets kund behöver vara sparad i Supabase först.");
+  }
+  const payload = toCloudProjectRow(project);
+  if (isUuid(project.id)) {
+    const { data, error } = await supabaseClient
+      .from("projects")
+      .update(payload)
+      .eq("id", project.id)
+      .select("id, client_id, name, status, starts_on, budget_hours, fixed_price, invoice_status, description, checklist, created_at")
+      .single();
+    if (error) throw error;
+    return mapCloudProject(data);
+  }
+  const { data, error } = await supabaseClient
+    .from("projects")
+    .insert(payload)
+    .select("id, client_id, name, status, starts_on, budget_hours, fixed_price, invoice_status, description, checklist, created_at")
+    .single();
+  if (error) throw error;
+  return mapCloudProject(data);
+}
+
+async function deleteCloudClient(clientId) {
+  if (!canUseCloudData() || !isUuid(clientId)) return true;
+  const { error } = await supabaseClient.from("clients").delete().eq("id", clientId);
+  if (error) throw error;
+  return true;
+}
+
+async function deleteCloudProject(projectId) {
+  if (!canUseCloudData() || !isUuid(projectId)) return true;
+  const { error } = await supabaseClient.from("projects").delete().eq("id", projectId);
+  if (error) throw error;
+  return true;
+}
+
 async function cloudApproveAccountRequest(requestId) {
   if (!canManageCloudAccounts()) {
     showToast("Logga in som aktiv admin i Supabase för att godkänna molnkonton.", "warning");
@@ -900,6 +1109,7 @@ async function cloudSignIn(email, password) {
   await loadCloudProfile();
   const synced = syncCloudProfileToLocalUser({ silent: true });
   await loadCloudAccountRequests();
+  await loadCloudBusinessData();
   if (canManageCloudAccounts()) renderAll();
   renderCloudStatus();
   if (!cloudProfile) {
@@ -5580,6 +5790,18 @@ async function updateEditedEntity(form) {
     client.invoiceAddress = data.get("invoiceAddress").trim();
     client.paymentTerms = data.get("paymentTerms").trim();
     client.vatRate = data.get("vatRate").trim();
+    if (canUseCloudData()) {
+      try {
+        const savedClient = await saveCloudClient(client);
+        if (savedClient?.id) {
+          const oldId = client.id;
+          Object.assign(client, savedClient);
+          remapClientId(oldId, savedClient.id);
+        }
+      } catch (error) {
+        showToast(`Kundändringen sparades lokalt men inte i Supabase: ${error.message}`, "warning");
+      }
+    }
   }
 
   if (kind === "project") {
@@ -5593,6 +5815,18 @@ async function updateEditedEntity(form) {
     project.budget = Number(data.get("budget") || 0);
     project.fixedPrice = Number(data.get("fixedPrice") || 0);
     project.description = data.get("description").trim();
+    if (canUseCloudData()) {
+      try {
+        const savedProject = await saveCloudProject(project);
+        if (savedProject?.id) {
+          const oldId = project.id;
+          Object.assign(project, savedProject);
+          remapProjectId(oldId, savedProject.id);
+        }
+      } catch (error) {
+        showToast(`Projektändringen sparades lokalt men inte i Supabase: ${error.message}`, "warning");
+      }
+    }
   }
 
   if (kind === "entry") {
@@ -6997,7 +7231,7 @@ els.entryForm.addEventListener("submit", (event) => {
   showToast("Tidsraden sparades.");
 });
 
-els.clientForm.addEventListener("submit", (event) => {
+els.clientForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const client = {
     id: makeId(),
@@ -7012,18 +7246,26 @@ els.clientForm.addEventListener("submit", (event) => {
     owner: els.clientOwner.value.trim(),
     rate: Number(els.clientRate.value || 0)
   };
+  if (canUseCloudData()) {
+    try {
+      const savedClient = await saveCloudClient(client);
+      if (savedClient?.id) Object.assign(client, savedClient);
+    } catch (error) {
+      showToast(`Kunden sparades lokalt men inte i Supabase: ${error.message}`, "warning");
+    }
+  }
   state.clients.push(client);
   selectedClientId = client.id;
   saveState();
   els.clientForm.reset();
   els.clientRate.value = "950";
   renderAll();
-  showToast("Kunden skapades.");
+  showToast(canUseCloudData() && isUuid(client.id) ? "Kunden skapades i Supabase." : "Kunden skapades.");
 });
 
-els.projectForm.addEventListener("submit", (event) => {
+els.projectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  state.projects.push({
+  const project = {
     id: makeId(),
     name: els.projectName.value.trim(),
     clientId: els.projectClient.value,
@@ -7037,13 +7279,22 @@ els.projectForm.addEventListener("submit", (event) => {
       { text: "Samla underlag", done: false },
       { text: "Godkänn leverans", done: false }
     ]
-  });
+  };
+  if (canUseCloudData()) {
+    try {
+      const savedProject = await saveCloudProject(project);
+      if (savedProject?.id) Object.assign(project, savedProject);
+    } catch (error) {
+      showToast(`Projektet sparades lokalt men inte i Supabase: ${error.message}`, "warning");
+    }
+  }
+  state.projects.push(project);
   saveState();
   els.projectForm.reset();
   els.projectStart.value = isoToday;
   els.projectBudget.value = "20";
   renderAll();
-  showToast("Projektet skapades.");
+  showToast(canUseCloudData() && isUuid(project.id) ? "Projektet skapades i Supabase." : "Projektet skapades.");
 });
 
 els.receiptForm.addEventListener("submit", async (event) => {
@@ -7199,7 +7450,7 @@ els.entriesTable.addEventListener("click", (event) => {
   }
 });
 
-els.clientGrid.addEventListener("click", (event) => {
+els.clientGrid.addEventListener("click", async (event) => {
   if (handleClientAction(event)) return;
   const editButton = event.target.closest("[data-edit-client]");
   if (editButton) {
@@ -7216,6 +7467,12 @@ els.clientGrid.addEventListener("click", (event) => {
   }
 
   if (!window.confirm("Vill du ta bort kunden?")) return;
+  try {
+    await deleteCloudClient(button.dataset.deleteClient);
+  } catch (error) {
+    showToast(`Kunden kunde inte tas bort i Supabase: ${error.message}`, "warning");
+    return;
+  }
   state.clients = state.clients.filter((client) => client.id !== button.dataset.deleteClient);
   saveState();
   renderAll();
@@ -7254,7 +7511,7 @@ els.clientDetail?.addEventListener("click", (event) => {
   handleClientAction(event);
 });
 
-els.projectGrid.addEventListener("click", (event) => {
+els.projectGrid.addEventListener("click", async (event) => {
   const openButton = event.target.closest("[data-open-project]");
   const editButton = event.target.closest("[data-edit-project]");
   const deleteButton = event.target.closest("[data-delete-project]");
@@ -7276,6 +7533,12 @@ els.projectGrid.addEventListener("click", (event) => {
       return;
     }
     if (!window.confirm("Vill du ta bort projektet?")) return;
+    try {
+      await deleteCloudProject(projectId);
+    } catch (error) {
+      showToast(`Projektet kunde inte tas bort i Supabase: ${error.message}`, "warning");
+      return;
+    }
     state.projects = state.projects.filter((project) => project.id !== projectId);
     saveState();
     renderAll();

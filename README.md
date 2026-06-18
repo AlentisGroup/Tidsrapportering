@@ -57,6 +57,9 @@ Den kan:
 - skapa kontoansökan som sparas i `account_requests`
 - synka godkänd Supabase-profil till lokal roll i prototypen
 - låta aktiv admin godkänna eller avvisa kontoansökningar via SQL-funktionerna `approve_account_request` och `reject_account_request`
+- läsa och spara kunder från `clients`
+- läsa och spara projekt från `projects`
+- automatiskt spara lokal kund till Supabase när ett molnprojekt skapas mot kunden
 - logga ut
 
 Den lokala prototypen använder fortfarande `localStorage` för datan tills vi migrerar tabellerna stegvis.

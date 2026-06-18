@@ -62,6 +62,7 @@ create table public.clients (
   billing_email text,
   invoice_reference text,
   invoice_address text,
+  owner_name text,
   payment_terms integer,
   vat_rate numeric,
   owner_profile_id uuid references public.profiles(id),
