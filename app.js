@@ -6,6 +6,13 @@ const supabaseClient = globalThis.supabase?.createClient && supabaseConfig.url &
 let cloudSession = null;
 let cloudProfile = null;
 let cloudAccountRequests = [];
+let cloudHealth = {
+  checkedAt: "",
+  auth: false,
+  database: false,
+  tables: [],
+  error: ""
+};
 
 function makeId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -26,6 +33,7 @@ const defaultState = {
   agreements: [],
   esignatures: [],
   invoices: [],
+  timeLocks: [],
   users: [
     { id: "admin-anna", name: "Anna Berg", email: "anna@novadex.example", role: "admin", title: "Administratör" },
     { id: "owner-johan", name: "Johan Lind", email: "johan@novadex.example", role: "owner", title: "Kundansvarig" },
@@ -48,6 +56,11 @@ const defaultState = {
     nextInvoiceNumber: 1,
     paymentTerms: 10,
     vatRate: 25,
+    workdayHours: 8,
+    defaultDueDays: 7,
+    invoiceReminderDays: 5,
+    portalAutoNotify: true,
+    customerApprovalRequired: true,
     bankgiro: "000-0000",
     invoiceFooter: "Tack för förtroendet."
   },
@@ -295,7 +308,8 @@ let timer = {
   running: false,
   startedAt: null,
   elapsedSeconds: 0,
-  interval: null
+  interval: null,
+  context: null
 };
 let calendarCursor = new Date();
 let newsLikes = 0;
@@ -305,6 +319,9 @@ let selectedProjectId = state.projects[0]?.id || "";
 let selectedTimePeriodMode = "day";
 let selectedTimeAnchorDate = isoToday;
 let selectedTimeEmployee = "";
+let selectedReportId = "worked-time";
+let selectedTaskStatus = "all";
+let selectedPortalFocus = "all";
 
 const viewTitles = {
   dashboard: "Start",
@@ -319,6 +336,8 @@ const viewTitles = {
   planning: "Resursplanering",
   analysis: "Analys",
   portal: "Kundportal",
+  collaboration: "Samarbete",
+  versions: "Testa olika versioner",
   reports: "Rapporter"
 };
 
@@ -330,9 +349,9 @@ const roleLabels = {
 };
 
 const roleAccess = {
-  admin: ["dashboard", "tasks", "time", "clients", "sales", "projects", "agreements", "esign", "invoice", "planning", "analysis", "portal", "reports"],
-  owner: ["dashboard", "tasks", "time", "clients", "sales", "projects", "agreements", "esign", "invoice", "planning", "analysis", "portal", "reports"],
-  employee: ["dashboard", "tasks", "time", "planning", "analysis", "reports"],
+  admin: ["dashboard", "tasks", "time", "clients", "sales", "projects", "agreements", "esign", "invoice", "planning", "analysis", "portal", "collaboration", "versions", "reports"],
+  owner: ["dashboard", "tasks", "time", "clients", "sales", "projects", "agreements", "esign", "invoice", "planning", "analysis", "portal", "collaboration", "versions", "reports"],
+  employee: ["dashboard", "tasks", "time", "planning", "analysis", "collaboration", "versions", "reports"],
   customer: ["portal"]
 };
 
@@ -344,18 +363,19 @@ const portalTaskTemplates = [
 ];
 
 const reportDefinitions = [
-  { id: "worked-time", title: "Uppföljning av arbetad och debiterbar tid", tag: "Tidrapportering", description: "Fördelar rapporterade och debiterbara timmar per kund, projekt, aktivitet och medarbetare.", view: "reports", favorite: true },
-  { id: "invoice-basis", title: "Fakturaunderlag", tag: "Fakturering", description: "Visar attesterade poster som kan bli fakturor samt redan skapade fakturaunderlag.", view: "invoice", favorite: true },
-  { id: "payroll", title: "Löneunderlag", tag: "Lön", description: "Samlar arbetad tid, frånvaro, kvitton, resor och traktamenten per medarbetare.", view: "reports", favorite: true },
-  { id: "receipts", title: "Kvitton och utlägg", tag: "Kvitton", description: "Följer upp privata utlägg och inköp med status för attest och eventuell fakturering.", view: "time", favorite: false },
-  { id: "absence", title: "Frånvaro", tag: "Frånvaro", description: "Visar frånvaroorsaker, timmar och lönepåverkan för vald period.", view: "analysis", favorite: false },
-  { id: "internal", title: "Interntid", tag: "Interntid", description: "Analyserar ej debiterbar tid och interna aktiviteter.", view: "analysis", favorite: false },
-  { id: "customers", title: "Kundstatus", tag: "Kund", description: "Kombinerar kundansvarig, projekt, avtal, öppna ärenden och fakturavärde.", view: "clients", favorite: false },
-  { id: "approvals", title: "Attestflöde", tag: "Attest", description: "Lista över tid, kvitton, resor, avtal och fakturor som kräver beslut.", view: "reports", favorite: true }
+  { id: "worked-time", code: "TID-01", title: "Uppföljning av arbetad och debiterbar tid", tag: "Tidrapportering", description: "Fördelar rapporterade och debiterbara timmar per kund, projekt, aktivitet och medarbetare.", view: "reports", moduleLabel: "Tidrapportering", owner: "Byråansvarig", frequency: "Vecka/månad", favorite: true, keywords: ["debiteringsgrad", "kundtid", "projekt", "aktivitet"] },
+  { id: "invoice-basis", code: "FAK-01", title: "Fakturaunderlag", tag: "Fakturering", description: "Visar attesterade poster som kan bli fakturor samt redan skapade fakturaunderlag.", view: "invoice", moduleLabel: "Fakturering", owner: "Ekonomi", frequency: "Löpande", favorite: true, keywords: ["att fakturera", "utkast", "spärrar", "fastpris"] },
+  { id: "payroll", code: "LON-01", title: "Löneunderlag", tag: "Lön", description: "Samlar arbetad tid, frånvaro, kvitton, resor och traktamenten per medarbetare.", view: "reports", moduleLabel: "Tid & lön", owner: "Löneansvarig", frequency: "Månad", favorite: true, keywords: ["lön", "frånvaro", "utlägg", "resor"] },
+  { id: "receipts", code: "KVI-01", title: "Kvitton och utlägg", tag: "Kvitton", description: "Följer upp privata utlägg och inköp med status för attest och eventuell fakturering.", view: "time", moduleLabel: "Kvitton", owner: "Medarbetare", frequency: "Löpande", favorite: false, keywords: ["utlägg", "kvitto", "inköp", "underlag"] },
+  { id: "absence", code: "FRV-01", title: "Frånvaro", tag: "Frånvaro", description: "Visar frånvaroorsaker, timmar och lönepåverkan för vald period.", view: "analysis", moduleLabel: "Analys", owner: "Löneansvarig", frequency: "Månad", favorite: false, keywords: ["sjuk", "semester", "vab", "schema"] },
+  { id: "internal", code: "INT-01", title: "Interntid", tag: "Interntid", description: "Analyserar ej debiterbar tid och interna aktiviteter.", view: "analysis", moduleLabel: "Analys", owner: "Ledning", frequency: "Vecka", favorite: false, keywords: ["intern", "ej debiterbar", "administration"] },
+  { id: "customers", code: "KND-01", title: "Kundstatus", tag: "Kund", description: "Kombinerar kundansvarig, projekt, avtal, öppna ärenden och fakturavärde.", view: "clients", moduleLabel: "CRM", owner: "Kundansvarig", frequency: "Löpande", favorite: false, keywords: ["kund", "avtal", "projekt", "portal"] },
+  { id: "approvals", code: "ATT-01", title: "Attestflöde", tag: "Attest", description: "Lista över tid, kvitton, resor, avtal och fakturor som kräver beslut.", view: "reports", moduleLabel: "Attest", owner: "Admin", frequency: "Dagligen", favorite: true, keywords: ["attest", "godkänna", "skickat", "spärrat"] }
 ];
 
 const els = {
   navItems: document.querySelectorAll("[data-view]"),
+  navGroups: document.querySelectorAll(".nav-group"),
   moduleItems: document.querySelectorAll("[data-module]"),
   shortcuts: document.querySelectorAll("[data-view-shortcut]"),
   views: document.querySelectorAll(".view"),
@@ -398,9 +418,18 @@ const els = {
   analysisSummary: document.querySelector("#analysis-summary"),
   timerDisplay: document.querySelector("#timer-display"),
   timerStatus: document.querySelector("#timer-status"),
+  timerLiveMeta: document.querySelector("#timer-live-meta"),
   timePeriodSummary: document.querySelector("#time-period-summary"),
+  timeStatusSummary: document.querySelector("#time-status-summary"),
   timePeriodBoard: document.querySelector("#time-period-board"),
+  monthDayBoard: document.querySelector("#month-day-board"),
+  monthRegisterAside: document.querySelector("#month-register-aside"),
+  timePrevPeriod: document.querySelector("#time-prev-period"),
+  timeTodayPeriod: document.querySelector("#time-today-period"),
+  timeNextPeriod: document.querySelector("#time-next-period"),
   timeExpandBlocks: document.querySelector("#time-expand-blocks"),
+  timeSubmitPeriod: document.querySelector("#time-submit-period"),
+  timeLockPeriod: document.querySelector("#time-lock-period"),
   timeAttestMonth: document.querySelector("#time-attest-month"),
   timerType: document.querySelector("#timer-type"),
   timerClient: document.querySelector("#timer-client"),
@@ -409,6 +438,7 @@ const els = {
   timerTask: document.querySelector("#timer-task"),
   timerDescription: document.querySelector("#timer-description"),
   startTimer: document.querySelector("#start-timer"),
+  pauseTimer: document.querySelector("#pause-timer"),
   stopTimer: document.querySelector("#stop-timer"),
   copyLastEntry: document.querySelector("#copy-last-entry"),
   entryForm: document.querySelector("#entry-form"),
@@ -480,14 +510,22 @@ const els = {
   invoiceCurrentMonth: document.querySelector("#invoice-current-month"),
   invoiceTotalOpen: document.querySelector("#invoice-total-open"),
   invoiceSearch: document.querySelector("#invoice-search"),
+  invoiceReadinessFilter: document.querySelector("#invoice-readiness-filter"),
   invoiceFrom: document.querySelector("#invoice-from"),
   invoiceTo: document.querySelector("#invoice-to"),
   invoiceTable: document.querySelector("#invoice-table"),
   invoiceHistoryTable: document.querySelector("#invoice-history-table"),
+  invoiceHistorySummary: document.querySelector("#invoice-history-summary"),
+  invoiceHistorySearch: document.querySelector("#invoice-history-search"),
+  invoiceHistoryStatus: document.querySelector("#invoice-history-status"),
+  invoiceHistoryClient: document.querySelector("#invoice-history-client"),
+  invoiceHistoryReset: document.querySelector("#invoice-history-reset"),
   invoiceTabs: document.querySelectorAll("[data-invoice-tab]"),
   invoiceViewModes: document.querySelectorAll("[data-invoice-viewmode]"),
   invoiceFilterButton: document.querySelector("#invoice-filter-button"),
+  invoiceResetFilter: document.querySelector("#invoice-reset-filter"),
   invoiceCommandStrip: document.querySelector("#invoice-command-strip"),
+  invoiceStatusSummary: document.querySelector("#invoice-status-summary"),
   portalClient: document.querySelector("#portal-client"),
   portalNewTask: document.querySelector("#portal-new-task"),
   portalSummary: document.querySelector("#portal-summary"),
@@ -496,6 +534,14 @@ const els = {
   portalInvoices: document.querySelector("#portal-invoices"),
   portalDocuments: document.querySelector("#portal-documents"),
   portalTemplates: document.querySelector("#portal-templates"),
+  collaborationSummary: document.querySelector("#collaboration-summary"),
+  collaborationFeed: document.querySelector("#collaboration-feed"),
+  collaborationPermissions: document.querySelector("#collaboration-permissions"),
+  collaborationCopyLink: document.querySelector("#collaboration-copy-link"),
+  collaborationNewThread: document.querySelector("#collaboration-new-thread"),
+  versionsSummary: document.querySelector("#versions-summary"),
+  versionGrid: document.querySelector("#version-grid"),
+  versionsApplyRecommended: document.querySelector("#versions-apply-recommended"),
   newsTabs: document.querySelectorAll("[data-news-tab]"),
   newsTitle: document.querySelector("#news-title"),
   newsBody: document.querySelector("#news-body"),
@@ -543,6 +589,11 @@ const els = {
   reportShowFavorites: document.querySelector("#report-show-favorites"),
   reportTags: document.querySelector("#report-tags"),
   reportCatalog: document.querySelector("#report-catalog"),
+  reportDetailTitle: document.querySelector("#report-detail-title"),
+  reportDetailDescription: document.querySelector("#report-detail-description"),
+  reportDetailActions: document.querySelector("#report-detail-actions"),
+  reportDetailMetrics: document.querySelector("#report-detail-metrics"),
+  reportResultList: document.querySelector("#report-result-list"),
   employeeList: document.querySelector("#employee-list"),
   adminSummary: document.querySelector("#admin-summary"),
   adminChecklist: document.querySelector("#admin-checklist"),
@@ -554,9 +605,16 @@ const els = {
   addAccountRequest: document.querySelector("#add-account-request"),
   approvalSummary: document.querySelector("#approval-summary"),
   approvalSearch: document.querySelector("#approval-search"),
+  approvalOwnerFilter: document.querySelector("#approval-owner-filter"),
+  approvalProjectFilter: document.querySelector("#approval-project-filter"),
   approvalKindFilter: document.querySelector("#approval-kind-filter"),
   approvalStatusFilter: document.querySelector("#approval-status-filter"),
+  approvalFrom: document.querySelector("#approval-from"),
+  approvalTo: document.querySelector("#approval-to"),
   approvalSelectAll: document.querySelector("#approval-select-all"),
+  approvalActionableOnly: document.querySelector("#approval-actionable-only"),
+  approvalResetFilters: document.querySelector("#approval-reset-filters"),
+  approvalGroupSummary: document.querySelector("#approval-group-summary"),
   approvalBulkSubmit: document.querySelector("#approval-bulk-submit"),
   approvalBulkApprove: document.querySelector("#approval-bulk-approve"),
   approvalBulkReject: document.querySelector("#approval-bulk-reject"),
@@ -616,6 +674,9 @@ function normalizeState(savedState) {
     projects: (Array.isArray(savedState.projects) ? savedState.projects : createStarterProjects(clients)).map((project) => ({
       fixedPrice: 0,
       invoiceStatus: "preliminary",
+      invoiceText: "",
+      invoicePaymentTerms: "",
+      invoiceVatRate: "",
       ...project
     })),
     receipts: (Array.isArray(savedState.receipts) ? savedState.receipts : []).map((receipt) => ({
@@ -649,6 +710,7 @@ function normalizeState(savedState) {
       ...signature
     })),
     invoices: Array.isArray(savedState.invoices) ? savedState.invoices : [],
+    timeLocks: Array.isArray(savedState.timeLocks) ? savedState.timeLocks : [],
     portalTasks: (Array.isArray(savedState.portalTasks) ? savedState.portalTasks : defaultState.portalTasks).map((task) => ({
       type: "Underlag",
       status: "open",
@@ -724,18 +786,65 @@ function isSupabaseReady() {
   return Boolean(supabaseClient);
 }
 
+async function checkCloudConnection(options = {}) {
+  const settings = { silent: true, ...options };
+  cloudHealth = {
+    checkedAt: isoToday,
+    auth: false,
+    database: false,
+    tables: [],
+    error: ""
+  };
+
+  if (!isSupabaseReady()) {
+    cloudHealth.error = "Supabase SDK eller konfiguration saknas.";
+    renderCloudStatus();
+    return cloudHealth;
+  }
+
+  try {
+    const { error: authError } = await supabaseClient.auth.getSession();
+    cloudHealth.auth = !authError;
+
+    const tableNames = ["profiles", "account_requests", "clients", "projects", "time_entries"];
+    for (const tableName of tableNames) {
+      const { error } = await supabaseClient
+        .from(tableName)
+        .select("id")
+        .limit(1);
+      if (error) {
+        cloudHealth.error = `${tableName}: ${error.message}`;
+      } else {
+        cloudHealth.tables.push(tableName);
+      }
+    }
+
+    cloudHealth.database = cloudHealth.tables.length === tableNames.length;
+    if (!settings.silent) {
+      showToast(cloudHealth.database ? "Supabase svarar och bastabellerna finns." : "Supabase svarar delvis, men alla tabeller kunde inte kontrolleras.", cloudHealth.database ? "success" : "warning");
+    }
+  } catch (error) {
+    cloudHealth.error = error.message || "Supabase kunde inte nås.";
+    if (!settings.silent) showToast(`Supabase-kontroll misslyckades: ${cloudHealth.error}`, "warning");
+  }
+
+  renderCloudStatus();
+  return cloudHealth;
+}
+
 function getCloudStatusLabel() {
   if (!isSupabaseReady()) return "Moln: lokal";
   if (cloudSession?.user && cloudProfile?.is_active === false) return "Moln: väntar";
   if (cloudSession?.user) return `Moln: ${cloudSession.user.email || "inloggad"}`;
+  if (cloudHealth.database) return "Moln: anslutet";
   return "Moln: redo";
 }
 
 function renderCloudStatus() {
   if (!els.cloudStatus) return;
   els.cloudStatus.textContent = getCloudStatusLabel();
-  els.cloudStatus.classList.toggle("ready", Boolean(cloudSession?.user));
-  els.cloudStatus.classList.toggle("warning", isSupabaseReady() && !cloudSession?.user);
+  els.cloudStatus.classList.toggle("ready", Boolean(cloudSession?.user || cloudHealth.database));
+  els.cloudStatus.classList.toggle("warning", isSupabaseReady() && !cloudSession?.user && !cloudHealth.database);
 }
 
 async function refreshCloudSession() {
@@ -743,6 +852,7 @@ async function refreshCloudSession() {
     renderCloudStatus();
     return null;
   }
+  await checkCloudConnection();
   const { data, error } = await supabaseClient.auth.getSession();
   if (error) {
     showToast(`Supabase kunde inte läsa sessionen: ${error.message}`, "warning");
@@ -1309,7 +1419,10 @@ async function cloudSignOut() {
 }
 
 function toISODate(date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function offsetDate(days) {
@@ -1332,6 +1445,10 @@ function formatCurrency(value) {
 
 function formatSEK(value) {
   return `${new Intl.NumberFormat("sv-SE", { maximumFractionDigits: 0 }).format(value)} SEK`;
+}
+
+function icon(name) {
+  return `<i class="ti ti-${name}" aria-hidden="true"></i>`;
 }
 
 function normalizeNumber(value, fallback = 0) {
@@ -1390,6 +1507,18 @@ function canAccessView(viewName) {
 function getDefaultViewForCurrentUser() {
   const user = getCurrentUser();
   return (roleAccess[user.role] || roleAccess.employee)[0] || "dashboard";
+}
+
+function getViewFromHash() {
+  const viewName = decodeURIComponent(String(location.hash || "").replace(/^#/, "")).trim();
+  return viewTitles[viewName] ? viewName : "";
+}
+
+function syncHashToView(viewName) {
+  if (!viewTitles[viewName]) return;
+  const nextHash = `#${encodeURIComponent(viewName)}`;
+  if (location.hash === nextHash) return;
+  history.replaceState(null, "", nextHash);
 }
 
 function isClientVisible(client) {
@@ -1490,6 +1619,89 @@ function getTimePeriodLabel() {
     return new Intl.DateTimeFormat("sv-SE", { month: "long", year: "numeric" }).format(date);
   }
   return selectedTimeAnchorDate;
+}
+
+function addDaysToISO(dateString, days) {
+  const date = new Date(`${dateString || isoToday}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return toISODate(date);
+}
+
+function addMonthsToISO(dateString, months) {
+  const date = new Date(`${dateString || isoToday}T12:00:00`);
+  date.setMonth(date.getMonth() + months);
+  return toISODate(date);
+}
+
+function getSelectedPeriodDates() {
+  if (selectedTimePeriodMode === "list") {
+    const visibleDates = [...new Set(state.entries.filter(isEntryVisible).map((entry) => entry.date))]
+      .filter(Boolean)
+      .sort();
+    return visibleDates.length ? visibleDates : [isoToday];
+  }
+  if (selectedTimePeriodMode === "week") {
+    const start = getWeekStart(new Date(`${selectedTimeAnchorDate || isoToday}T12:00:00`));
+    return Array.from({ length: 7 }, (_, index) => toISODate(new Date(start.getFullYear(), start.getMonth(), start.getDate() + index)));
+  }
+  if (selectedTimePeriodMode === "month") {
+    const anchor = new Date(`${selectedTimeAnchorDate || isoToday}T12:00:00`);
+    const days = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
+    return Array.from({ length: days }, (_, index) => toISODate(new Date(anchor.getFullYear(), anchor.getMonth(), index + 1)));
+  }
+  return [selectedTimeAnchorDate || isoToday];
+}
+
+function getSelectedPeriodRange() {
+  const dates = getSelectedPeriodDates().filter(Boolean).sort();
+  return {
+    from: dates[0] || isoToday,
+    to: dates[dates.length - 1] || dates[0] || isoToday
+  };
+}
+
+function getScheduledHoursForSelectedPeriod() {
+  if (selectedTimePeriodMode === "list") return 40;
+  return getSelectedPeriodDates().reduce((sum, dateString) => {
+    const day = new Date(`${dateString}T12:00:00`).getDay();
+    return sum + ([0, 6].includes(day) ? 0 : 8);
+  }, 0);
+}
+
+function getSelectedTimePeriodKey(mode = selectedTimePeriodMode, anchorDate = selectedTimeAnchorDate) {
+  if (mode === "list") return "list";
+  if (mode === "week") {
+    const start = getWeekStart(new Date(`${anchorDate || isoToday}T12:00:00`));
+    return `week:${toISODate(start)}`;
+  }
+  if (mode === "month") {
+    return `month:${String(anchorDate || isoToday).slice(0, 7)}`;
+  }
+  return `day:${anchorDate || isoToday}`;
+}
+
+function isSelectedTimePeriodLocked(mode = selectedTimePeriodMode, anchorDate = selectedTimeAnchorDate) {
+  const key = getSelectedTimePeriodKey(mode, anchorDate);
+  return (state.timeLocks || []).some((lock) => lock.key === key);
+}
+
+function isDateLocked(dateString) {
+  return ["day", "week", "month"].some((mode) => isSelectedTimePeriodLocked(mode, dateString || isoToday));
+}
+
+function setTimePeriodAnchorByDelta(delta) {
+  if (selectedTimePeriodMode === "list") {
+    selectedTimeAnchorDate = isoToday;
+  } else if (selectedTimePeriodMode === "month") {
+    selectedTimeAnchorDate = addMonthsToISO(selectedTimeAnchorDate, delta);
+  } else if (selectedTimePeriodMode === "week") {
+    selectedTimeAnchorDate = addDaysToISO(selectedTimeAnchorDate, delta * 7);
+  } else {
+    selectedTimeAnchorDate = addDaysToISO(selectedTimeAnchorDate, delta);
+  }
+  if (els.entryDate) els.entryDate.value = selectedTimeAnchorDate;
+  renderTimePeriodOverview();
+  renderEntriesTable();
 }
 
 function groupBy(items, getKey) {
@@ -1597,7 +1809,7 @@ function getEffectiveInvoiceStatus(invoice) {
 }
 
 function getInvoiceTimeline(invoice) {
-  return [
+  const baseTimeline = [
     { label: "Skapad", date: invoice.createdAt, active: true },
     { label: "Skickad", date: invoice.sentAt, active: Boolean(invoice.sentAt) },
     { label: "Kundgodkänd", date: invoice.customerApprovedAt, active: Boolean(invoice.customerApprovedAt) },
@@ -1606,6 +1818,56 @@ function getInvoiceTimeline(invoice) {
     { label: "Krediterad", date: invoice.creditedAt, active: Boolean(invoice.creditedAt) },
     { label: "Återöppnad", date: invoice.reopenedAt, active: Boolean(invoice.reopenedAt) }
   ].filter((item) => item.active);
+  const eventTimeline = (invoice.events || []).map((event) => ({
+    label: event.label,
+    date: event.date,
+    active: true
+  }));
+  return [...baseTimeline, ...eventTimeline]
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.label).localeCompare(String(b.label)));
+}
+
+function addInvoiceEvent(invoice, label, note = "") {
+  if (!invoice) return;
+  invoice.events = [
+    ...(invoice.events || []),
+    {
+      id: makeId(),
+      date: isoToday,
+      actor: getCurrentUser().name,
+      label,
+      note
+    }
+  ];
+}
+
+function getInvoiceNextAction(invoice) {
+  const status = getEffectiveInvoiceStatus(invoice);
+  if (status === "created") {
+    return { label: "Skicka till kund", detail: "Dela till portal eller skicka e-post", tone: "active", command: "share" };
+  }
+  if (status === "sent") {
+    return { label: "Väntar på kund", detail: invoice.portalSharedAt ? "Kunden kan godkänna i portalen" : "Följ upp utskick", tone: "waiting", command: "followup" };
+  }
+  if (status === "overdue") {
+    return { label: "Förfallen", detail: "Följ upp betalning", tone: "blocked", command: "followup" };
+  }
+  if (status === "customerApproved") {
+    return { label: "Redo för betalning", detail: "Markera betald när pengarna kommit in", tone: "ready", command: "paid" };
+  }
+  if (status === "changeRequested") {
+    return { label: "Ändring begärd", detail: invoice.changeRequestMessage || "Hantera kundens fråga", tone: "blocked", command: "reopen" };
+  }
+  if (status === "paid") {
+    return { label: "Klar", detail: invoice.paidAt ? `Betald ${invoice.paidAt}` : "Betald", tone: "done", command: "none" };
+  }
+  if (status === "credited") {
+    return { label: "Krediterad", detail: invoice.creditedAt || "Stängd", tone: "done", command: "none" };
+  }
+  if (status === "reopened") {
+    return { label: "Återöppnad", detail: "Underlaget finns åter i faktureringen", tone: "active", command: "none" };
+  }
+  return { label: "Granska", detail: "Kontrollera fakturan", tone: "active", command: "none" };
 }
 
 function getDaysUntil(dateString) {
@@ -1942,9 +2204,10 @@ function renderEntriesTable() {
   els.entriesTable.innerHTML = entries.map((entry) => {
     const client = getClient(entry.clientId);
     const statusLabel = getApprovalStatusLabel(entry.status);
-    const canSubmit = entry.status === "draft" || entry.status === "rejected";
-    const canReview = entry.status === "submitted" && (isAdminUser() || isOwnerUser());
-    const isLocked = isLockedStatus(entry.status);
+    const isPeriodLocked = isDateLocked(entry.date);
+    const canSubmit = !isPeriodLocked && (entry.status === "draft" || entry.status === "rejected");
+    const canReview = !isPeriodLocked && entry.status === "submitted" && (isAdminUser() || isOwnerUser());
+    const isLocked = isLockedStatus(entry.status) || isPeriodLocked;
     return `
       <tr>
         <td>${entry.date}</td>
@@ -1962,22 +2225,22 @@ function renderEntriesTable() {
           <div class="row-actions">
             ${canSubmit ? `
             <button class="mini-button" type="button" title="Skicka in" aria-label="Skicka in" data-submit-entry="${entry.id}">
-              <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"></path></svg>
+              ${icon("send")}
             </button>
             ` : ""}
             ${canReview ? `
             <button class="mini-button" type="button" title="Attestera" aria-label="Attestera" data-approve="${entry.id}">
-              <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg>
+              ${icon("check")}
             </button>
             <button class="mini-button" type="button" title="Avvisa" aria-label="Avvisa" data-reject-entry="${entry.id}">
-              <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+              ${icon("x")}
             </button>
             ` : ""}
-            <button class="mini-button" type="button" title="Redigera" aria-label="Redigera" data-edit-entry="${entry.id}">
-              <svg viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4Z"></path></svg>
+            <button class="mini-button" type="button" title="Redigera" aria-label="Redigera" data-edit-entry="${entry.id}" ${isLocked ? "disabled" : ""}>
+              ${icon("pencil")}
             </button>
             <button class="mini-button" type="button" title="Ta bort" aria-label="Ta bort" data-delete="${entry.id}" ${isLocked ? "disabled" : ""}>
-              <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path></svg>
+              ${icon("trash")}
             </button>
           </div>
         </td>
@@ -2020,16 +2283,16 @@ function renderClients() {
         <div class="client-card-actions">
           <button class="ghost-button small-button" type="button" data-open-client="${client.id}">Öppna kundkort</button>
           <button class="mini-button" type="button" title="Registrera tid" aria-label="Registrera tid" data-client-time="${client.id}">
-            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+            ${icon("plus")}
           </button>
           <button class="mini-button" type="button" title="Fakturaunderlag" aria-label="Fakturaunderlag" data-client-invoice="${client.id}">
-            <svg viewBox="0 0 24 24"><path d="M7 3h10v18l-2-1-2 1-2-1-2 1-2-1V3ZM10 8h4M10 12h4M10 16h2"></path></svg>
+            ${icon("file-invoice")}
           </button>
           <button class="mini-button" type="button" title="Redigera kund" aria-label="Redigera kund" data-edit-client="${client.id}">
-            <svg viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4Z"></path></svg>
+            ${icon("pencil")}
           </button>
           <button class="mini-button" type="button" title="Ta bort kund" aria-label="Ta bort kund" data-delete-client="${client.id}">
-            <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path></svg>
+            ${icon("trash")}
           </button>
         </div>
       </article>
@@ -2218,7 +2481,13 @@ function renderProjects() {
 
   els.projectGrid.innerHTML = visibleProjects.map((project) => {
     const entries = state.entries.filter((entry) => isEntryVisible(entry) && (entry.projectId === project.id || entry.workOrder === project.name));
+    const client = getClient(project.clientId);
+    const approvedEntries = entries.filter((entry) => isInvoiceReady(entry.status));
+    const openEntries = entries.filter((entry) => isApprovalOpen(entry.status));
+    const receipts = state.receipts.filter((receipt) => receipt.projectId === project.id);
+    const approvedReceiptValue = receipts.filter((receipt) => isInvoiceReady(receipt.status)).reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0);
     const hours = sumHours(entries);
+    const invoiceValue = sumHours(approvedEntries.filter((entry) => entry.billable)) * Number(client?.rate || 0) + approvedReceiptValue + Number(project.fixedPrice || 0);
     const progress = Number(project.budget || 0) ? Math.min(100, Math.round((hours / Number(project.budget)) * 100)) : 0;
     const isSelected = project.id === selectedProjectId;
     const checklist = (project.checklist || []).map((item, index) => `
@@ -2233,11 +2502,15 @@ function renderProjects() {
         <div class="client-card-header">
           <div>
             <strong>${escapeHtml(project.name)}</strong>
-            <span>${escapeHtml(getClient(project.clientId)?.name || "Okänd kund")} · ${escapeHtml(project.manager || "Ingen projektledare")}</span>
+            <span>${escapeHtml(client?.name || "Okänd kund")} · ${escapeHtml(project.manager || "Ingen projektledare")}</span>
           </div>
           <span class="badge ${project.status === "active" ? "approved" : "draft"}">${escapeHtml(getProjectStatusLabel(project.status))}</span>
         </div>
         <p>${escapeHtml(project.description || "Ingen beskrivning")}</p>
+        <div class="project-card-stats">
+          <span>${openEntries.length} öppna underlag</span>
+          <span>${formatCurrency(invoiceValue)} fakturerbart</span>
+        </div>
         <div class="project-progress">
           <div><span style="width:${progress}%"></span></div>
           <strong>${formatHours(hours)} / ${formatHours(Number(project.budget || 0))}</strong>
@@ -2256,6 +2529,156 @@ function renderProjects() {
   }).join("");
 
   renderProjectDetail();
+}
+
+function getProjectActionPlan(project, entries, receipts, invoiceValue) {
+  const checklist = project.checklist || [];
+  const openChecklist = checklist.filter((item) => !item.done).length;
+  const submittedEntries = entries.filter((entry) => entry.status === "submitted").length;
+  const draftEntries = entries.filter((entry) => ["draft", "rejected"].includes(entry.status || "draft")).length;
+  const approvedEntries = entries.filter((entry) => isInvoiceReady(entry.status));
+  const billableApprovedHours = sumHours(approvedEntries.filter((entry) => entry.billable));
+  const customer = getClient(project.clientId);
+  return [
+    {
+      key: "timer",
+      title: "Registrera arbetstid",
+      text: entries.length ? `${formatHours(sumHours(entries))} rapporterat på projektet` : "Ingen tid registrerad ännu",
+      action: "start-timer",
+      tone: entries.length ? "done" : "todo"
+    },
+    {
+      key: "attest",
+      title: "Attestera underlag",
+      text: submittedEntries ? `${submittedEntries} tidsrader väntar på attest` : draftEntries ? `${draftEntries} utkast behöver skickas in` : "Inga öppna tidsrader",
+      action: "open-approvals",
+      tone: submittedEntries ? "warning" : draftEntries ? "todo" : "done"
+    },
+    {
+      key: "checklist",
+      title: "Arbetsorder/checklista",
+      text: openChecklist ? `${openChecklist} steg återstår` : checklist.length ? "Alla checklistesteg är klara" : "Ingen checklista skapad",
+      action: "edit-project",
+      tone: openChecklist || !checklist.length ? "todo" : "done"
+    },
+    {
+      key: "invoice",
+      title: "Fakturaunderlag",
+      text: invoiceValue > 0 ? `${formatCurrency(invoiceValue)} kan förberedas` : "Inget att fakturera ännu",
+      action: invoiceValue > 0 ? "open-invoice" : "start-timer",
+      tone: invoiceValue > 0 ? "warning" : "todo"
+    },
+    {
+      key: "agreement",
+      title: "Avtal/offert",
+      text: customer?.billingEmail || customer?.email ? `Kundkontakt ${customer.billingEmail || customer.email}` : "Kundens e-post saknas",
+      action: "create-agreement",
+      tone: customer?.billingEmail || customer?.email ? "done" : "todo"
+    },
+    {
+      key: "receipts",
+      title: "Kvitton/utlägg",
+      text: receipts.length ? `${receipts.length} kvitton kopplade` : "Inga kvitton på projektet",
+      action: "open-receipts",
+      tone: receipts.some((receipt) => isApprovalOpen(receipt.status)) ? "warning" : receipts.length ? "done" : "todo"
+    }
+  ];
+}
+
+function getProjectRiskRows(project, entries, receipts, budget, invoiceValue) {
+  const hours = sumHours(entries);
+  const draftEntries = entries.filter((entry) => ["draft", "rejected"].includes(entry.status || "draft")).length;
+  const submittedEntries = entries.filter((entry) => entry.status === "submitted").length;
+  const openReceipts = receipts.filter((receipt) => isApprovalOpen(receipt.status)).length;
+  const budgetUsage = budget ? Math.round((hours / budget) * 100) : 0;
+  return [
+    {
+      level: budget && budgetUsage >= 90 ? "warning" : "ok",
+      title: "Budget",
+      text: budget ? `${budgetUsage}% använt (${formatHours(hours)} av ${formatHours(budget)})` : "Budget saknas"
+    },
+    {
+      level: submittedEntries ? "warning" : "ok",
+      title: "Attest",
+      text: submittedEntries ? `${submittedEntries} tidsrader väntar på attest` : "Ingen tid väntar på attest"
+    },
+    {
+      level: draftEntries ? "warning" : "ok",
+      title: "Utkast",
+      text: draftEntries ? `${draftEntries} tidsrader behöver skickas in` : "Inga öppna tidsutkast"
+    },
+    {
+      level: openReceipts ? "warning" : "ok",
+      title: "Kvitton",
+      text: openReceipts ? `${openReceipts} kvitton behöver hanteras` : "Kvitton är i ordning"
+    },
+    {
+      level: invoiceValue > 0 ? "warning" : "ok",
+      title: "Fakturering",
+      text: invoiceValue > 0 ? `${formatCurrency(invoiceValue)} finns att fakturera` : "Inget fakturerbart underlag"
+    }
+  ];
+}
+
+function handleProjectAction(action, projectId) {
+  const project = getProject(projectId);
+  if (!project) return false;
+  const client = getClient(project.clientId);
+
+  if (action === "start-timer") {
+    openTimerWithContext({
+      clientId: project.clientId,
+      projectId: project.id,
+      workOrder: project.name,
+      task: "Bokföring",
+      description: project.description || ""
+    });
+    return true;
+  }
+
+  if (action === "open-approvals") {
+    if (els.approvalProjectFilter) els.approvalProjectFilter.value = project.id;
+    if (els.approvalStatusFilter) els.approvalStatusFilter.value = "open";
+    setView("reports");
+    renderApprovalFlow();
+    showToast("Öppnade attestflödet för projektets underlag.");
+    return true;
+  }
+
+  if (action === "edit-project") {
+    openEntityEditor("project", project.id);
+    return true;
+  }
+
+  if (action === "open-invoice") {
+    openInvoiceDetail(project.id);
+    return true;
+  }
+
+  if (action === "create-agreement") {
+    if (els.agreementClient) els.agreementClient.value = project.clientId;
+    if (els.agreementProject) els.agreementProject.value = project.id;
+    if (els.agreementEmail) els.agreementEmail.value = client?.billingEmail || client?.email || "";
+    if (els.agreementTitle) els.agreementTitle.value = `Uppdragsavtal ${project.name}`;
+    if (els.agreementMessage) {
+      els.agreementMessage.value = `Hej, här kommer uppdragsavtalet för ${project.name}.`;
+    }
+    setView("agreements");
+    focusElement(els.agreementTitle);
+    showToast("Avtal/offert för projektet är förberedd.");
+    return true;
+  }
+
+  if (action === "open-receipts") {
+    if (els.receiptClient) els.receiptClient.value = project.clientId;
+    if (els.receiptProject) els.receiptProject.value = project.id;
+    setView("time");
+    focusElement(els.receiptSupplier);
+    showToast("Kvittoflödet är förberett för projektet.");
+    return true;
+  }
+
+  return false;
 }
 
 function renderProjectDetail() {
@@ -2281,6 +2704,10 @@ function renderProjectDetail() {
   const receiptValue = receipts.filter((receipt) => isInvoiceReady(receipt.status)).reduce((total, receipt) => total + Number(receipt.amount || 0), 0);
   const travelValue = travels.filter((travel) => isInvoiceReady(travel.status)).reduce((total, travel) => total + getTravelValue(travel), 0);
   const invoiceValue = approvedHours * Number(client?.rate || 0) + receiptValue + travelValue + Number(project.fixedPrice || 0);
+  const actionPlan = getProjectActionPlan(project, entries, receipts, invoiceValue);
+  const riskRows = getProjectRiskRows(project, entries, receipts, budget, invoiceValue);
+  const budgetRemaining = Math.max(budget - hours, 0);
+  const lastEntryDate = entries[0]?.date || project.start || "-";
 
   els.projectDetail.innerHTML = `
     <div class="section-heading">
@@ -2300,13 +2727,31 @@ function renderProjectDetail() {
       <div><span>Rapporterat</span><strong>${formatHours(hours)}</strong></div>
       <div><span>Attesterat</span><strong>${formatHours(approvedHours)}</strong></div>
       <div><span>Budget</span><strong>${formatHours(budget)}</strong></div>
+      <div><span>Kvar budget</span><strong>${formatHours(budgetRemaining)}</strong></div>
       <div><span>Att fakturera</span><strong>${formatCurrency(invoiceValue)}</strong></div>
       <div><span>Öppna underlag</span><strong>${openEntries.length + receipts.filter((receipt) => isApprovalOpen(receipt.status)).length}</strong></div>
       <div><span>Status</span><strong>${escapeHtml(getProjectStatusLabel(project.status))}</strong></div>
+      <div><span>Senast aktivitet</span><strong>${escapeHtml(lastEntryDate)}</strong></div>
     </div>
     <div class="project-progress detail-progress">
       <div><span style="width:${progress}%"></span></div>
       <strong>${progress}% av budget</strong>
+    </div>
+    <div class="project-action-board">
+      ${actionPlan.map((item) => `
+        <button class="project-action-card ${item.tone}" type="button" data-project-action="${item.action}" data-project-id="${project.id}">
+          <strong>${escapeHtml(item.title)}</strong>
+          <span>${escapeHtml(item.text)}</span>
+        </button>
+      `).join("")}
+    </div>
+    <div class="project-risk-panel">
+      ${riskRows.map((item) => `
+        <div class="project-risk-row ${item.level}">
+          <strong>${escapeHtml(item.title)}</strong>
+          <span>${escapeHtml(item.text)}</span>
+        </div>
+      `).join("")}
     </div>
     <div class="client-detail-grid">
       <section>
@@ -2421,27 +2866,27 @@ function renderReceipts() {
           <b>${formatCurrency(Number(receipt.amount || 0))}</b>
           ${canSubmit ? `
           <button class="mini-button" type="button" title="Skicka in kvitto" aria-label="Skicka in kvitto" data-submit-receipt="${receipt.id}">
-            <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"></path></svg>
+            ${icon("send")}
           </button>
           ` : ""}
           ${canReview ? `
           <button class="mini-button" type="button" title="Attestera kvitto" aria-label="Attestera kvitto" data-approve-receipt="${receipt.id}">
-            <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg>
+            ${icon("check")}
           </button>
           <button class="mini-button" type="button" title="Avvisa kvitto" aria-label="Avvisa kvitto" data-reject-receipt="${receipt.id}">
-            <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+            ${icon("x")}
           </button>
           ` : ""}
           ${receipt.fileData ? `
           <button class="mini-button" type="button" title="Öppna kvittofil" aria-label="Öppna kvittofil" data-open-document="receipt" data-document-id="${receipt.id}">
-            <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h8M8 17h4"></path></svg>
+            ${icon("file-text")}
           </button>
           ` : ""}
           <button class="mini-button" type="button" title="Redigera kvitto" aria-label="Redigera kvitto" data-edit-receipt="${receipt.id}">
-            <svg viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4Z"></path></svg>
+            ${icon("pencil")}
           </button>
           <button class="mini-button" type="button" title="Ta bort kvitto" aria-label="Ta bort kvitto" data-delete-receipt="${receipt.id}" ${isLockedStatus(receipt.status) ? "disabled" : ""}>
-            <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path></svg>
+            ${icon("trash")}
           </button>
         </div>
       </div>
@@ -2492,22 +2937,22 @@ function renderTravels() {
           <span class="muted-line">${Number(travel.quantity || 0).toFixed(1).replace(".", ",")} ${travel.type === "allowance" ? "dagar" : "mil"}</span>
           ${canSubmit ? `
           <button class="mini-button" type="button" title="Skicka in resa" aria-label="Skicka in resa" data-submit-travel="${travel.id}">
-            <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"></path></svg>
+            ${icon("send")}
           </button>
           ` : ""}
           ${canReview ? `
           <button class="mini-button" type="button" title="Attestera resa" aria-label="Attestera resa" data-approve-travel="${travel.id}">
-            <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg>
+            ${icon("check")}
           </button>
           <button class="mini-button" type="button" title="Avvisa resa" aria-label="Avvisa resa" data-reject-travel="${travel.id}">
-            <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+            ${icon("x")}
           </button>
           ` : ""}
           <button class="mini-button" type="button" title="Redigera resa" aria-label="Redigera resa" data-edit-travel="${travel.id}">
-            <svg viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4Z"></path></svg>
+            ${icon("pencil")}
           </button>
           <button class="mini-button" type="button" title="Ta bort resa" aria-label="Ta bort resa" data-delete-travel="${travel.id}" ${isLockedStatus(travel.status) ? "disabled" : ""}>
-            <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"></path></svg>
+            ${icon("trash")}
           </button>
         </div>
       </div>
@@ -2921,6 +3366,57 @@ function createPortalTaskFromTemplate(templateIndex) {
   showToast(`Mallen skapade ett ärende till ${client.name}.`);
 }
 
+function getPortalHealth({ tasks, invoices, agreements, documents }) {
+  const openTasks = tasks.filter((task) => task.status !== "done");
+  const overdueTasks = openTasks.filter((task) => task.dueDate && task.dueDate < isoToday);
+  const invoicesNeedingAction = invoices.filter((invoice) => ["created", "sent", "overdue", "changeRequested"].includes(getEffectiveInvoiceStatus(invoice)));
+  const agreementsNeedingAction = agreements.filter((agreement) => ["sent", "expired"].includes(getEffectiveAgreementStatus(agreement)));
+  const uploadedThisMonth = documents.filter((receipt) => String(receipt.date || "").slice(0, 7) === String(isoToday).slice(0, 7));
+  const nextAction = overdueTasks.length
+    ? { label: "Följ upp försenade ärenden", focus: "tasks", tone: "blocked" }
+    : invoicesNeedingAction.length
+      ? { label: "Granska fakturor", focus: "invoices", tone: "active" }
+      : agreementsNeedingAction.length
+        ? { label: "Följ upp avtal/signering", focus: "agreements", tone: "active" }
+        : openTasks.length
+          ? { label: "Fortsätt med öppna ärenden", focus: "tasks", tone: "active" }
+          : { label: "Portalen är i fas", focus: "all", tone: "done" };
+  return {
+    openTasks,
+    overdueTasks,
+    invoicesNeedingAction,
+    agreementsNeedingAction,
+    uploadedThisMonth,
+    nextAction
+  };
+}
+
+function renderPortalActionStrip(client, health) {
+  return `
+    <div class="portal-action-strip ${health.nextAction.tone}">
+      <div>
+        <strong>${escapeHtml(health.nextAction.label)}</strong>
+        <span>${health.openTasks.length} öppna ärenden · ${health.invoicesNeedingAction.length} fakturor att följa upp · ${health.uploadedThisMonth.length} nya underlag denna månad</span>
+      </div>
+      <div class="summary-actions">
+        <button class="${selectedPortalFocus === "all" ? "active" : ""}" type="button" data-portal-focus="all">Översikt</button>
+        <button class="${selectedPortalFocus === "tasks" ? "active" : ""}" type="button" data-portal-focus="tasks">Ärenden</button>
+        <button class="${selectedPortalFocus === "invoices" ? "active" : ""}" type="button" data-portal-focus="invoices">Fakturor</button>
+        <button class="${selectedPortalFocus === "agreements" ? "active" : ""}" type="button" data-portal-focus="agreements">Avtal</button>
+        <button class="${selectedPortalFocus === "documents" ? "active" : ""}" type="button" data-portal-focus="documents">Underlag</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderPortalInvoiceProgress(invoice, status) {
+  const steps = getInvoiceRecordFlowSteps(invoice, status).map((step) => ({
+    ...step,
+    note: step.note === "-" ? "" : step.note
+  }));
+  return renderInvoiceFlowSteps(steps);
+}
+
 function renderPortal() {
   if (!els.portalSummary || !els.portalTaskList) return;
   renderPortalTemplates();
@@ -2947,14 +3443,17 @@ function renderPortal() {
     .filter((receipt) => receipt.fileData || receipt.supplier)
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
   const unpaid = portalInvoices.filter((invoice) => !["paid", "credited"].includes(getEffectiveInvoiceStatus(invoice)));
+  const health = getPortalHealth({ tasks: portalTasks, invoices: portalInvoices, agreements: portalAgreements, documents: portalDocuments });
 
   els.portalSummary.innerHTML = `
     <div><span>Kund</span><strong>${escapeHtml(client.name)}</strong></div>
     <div><span>Öppna ärenden</span><strong>${openTasks.length}</strong></div>
+    <div><span>Försenade</span><strong>${health.overdueTasks.length}</strong></div>
     <div><span>Avtal</span><strong>${portalAgreements.length}</strong></div>
     <div><span>Obetalda fakturor</span><strong>${unpaid.length}</strong></div>
-    <div><span>Underlag</span><strong>${portalDocuments.length}</strong></div>
+    <div><span>Nya underlag</span><strong>${health.uploadedThisMonth.length}</strong></div>
     <div><span>${getCurrentUser().role === "customer" ? "Fakturavärde" : "Att fakturera"}</span><strong>${getCurrentUser().role === "customer" ? formatSEK(portalInvoices.reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0)) : formatSEK(snapshot.invoiceValue)}</strong></div>
+    ${renderPortalActionStrip(client, health)}
   `;
 
   if (!portalTasks.length) {
@@ -2963,15 +3462,25 @@ function renderPortal() {
     els.portalTaskList.innerHTML = portalTasks.map((task) => {
       const isDone = task.status === "done";
       const canManage = isAdminUser() || isOwnerUser();
+      const isOverdue = !isDone && task.dueDate && task.dueDate < isoToday;
+      const linkedInvoice = task.invoiceId ? (state.invoices || []).find((invoice) => invoice.id === task.invoiceId) : null;
       return `
-        <div class="approval-card portal-task-card ${getPortalStatusBadgeClass(task.status)}">
+        <div class="approval-card portal-task-card ${getPortalStatusBadgeClass(task.status)} ${isOverdue ? "portal-overdue" : ""}">
           <div>
             <div class="approval-title">
               <strong>${escapeHtml(task.title)}</strong>
               <span class="badge ${getPortalStatusBadgeClass(task.status)}">${getPortalStatusLabel(task.status)}</span>
+              ${isOverdue ? `<span class="badge rejected">Försenad</span>` : ""}
             </div>
             <span>${escapeHtml(task.type || "Ärende")} · ansvarig ${escapeHtml(task.owner || "-")} · förfaller ${task.dueDate || "-"}</span>
             ${task.message ? `<small class="review-note">${escapeHtml(task.message)}</small>` : ""}
+            <div class="portal-card-meta">
+              <span>${(task.comments || []).length} kommentarer</span>
+              <span>${(task.uploads || []).length} uppladdningar</span>
+              ${task.waitingOn ? `<span>Väntar på ${task.waitingOn === "customer" ? "kund" : "byrå"}</span>` : ""}
+              ${task.lastActivityAt ? `<span>Senast ${escapeHtml(task.lastActivityAt)}</span>` : ""}
+              ${linkedInvoice ? `<span>Faktura ${escapeHtml(linkedInvoice.number)}</span>` : ""}
+            </div>
             ${(task.uploads || []).length ? `
               <div class="portal-upload-list">
                 ${(task.uploads || []).map((upload) => `
@@ -3045,14 +3554,33 @@ function renderPortal() {
   } else {
     els.portalInvoices.innerHTML = portalInvoices.map((invoice) => {
       const status = getEffectiveInvoiceStatus(invoice);
+      const relatedTasks = (state.portalTasks || []).filter((task) => task.invoiceId === invoice.id || task.id === invoice.portalTaskId);
+      const isActionableForCustomer = getCurrentUser().role === "customer" && ["created", "sent", "overdue", "customerApproved"].includes(status);
+      const nextAction = getInvoiceNextAction(invoice);
       return `
-        <div class="employee-item">
+        <div class="employee-item portal-invoice-card ${getInvoiceStatusBadge(status)}">
           <div>
-            <strong>${escapeHtml(invoice.number)}</strong>
-            <span>${getInvoiceStatusLabel(status)} · förfaller ${invoice.dueDate || "-"} · ${formatSEK(Number(invoice.totalInclVat || invoice.total || 0))}</span>
+            <div class="approval-title">
+              <strong>${escapeHtml(invoice.number)}</strong>
+              <span class="badge ${getInvoiceStatusBadge(status)}">${getInvoiceStatusLabel(status)}</span>
+              ${isActionableForCustomer ? `<span class="badge submitted">Åtgärd</span>` : ""}
+            </div>
+            <span>${getProject(invoice.projectId)?.name || "Faktura"} · förfaller ${invoice.dueDate || "-"} · ${formatSEK(Number(invoice.totalInclVat || invoice.total || 0))}</span>
+            <div class="portal-card-meta">
+              <span>${invoice.portalSharedAt ? `Delad ${escapeHtml(invoice.portalSharedAt)}` : "Ej delad"}</span>
+              <span>${relatedTasks.length} portalärenden</span>
+              ${invoice.changeRequestMessage ? `<span>Ändring begärd</span>` : ""}
+            </div>
+            <div class="portal-next-action ${escapeHtml(nextAction.tone || "neutral")}">
+              <strong>${escapeHtml(nextAction.label)}</strong>
+              <span>${escapeHtml(nextAction.detail)}</span>
+            </div>
+            ${renderPortalInvoiceProgress(invoice, status)}
           </div>
           <div class="row-actions">
-            <button class="ghost-button small-button" type="button" data-invoice-detail="${invoice.id}">Öppna</button>
+            <button class="ghost-button small-button" type="button" data-invoice-detail="${invoice.id}">Fakturakort</button>
+            <button class="ghost-button small-button" type="button" data-open-document="invoice" data-document-id="${invoice.id}">Visa faktura</button>
+            ${getCurrentUser().role !== "customer" ? `<button class="ghost-button small-button" type="button" data-invoice-share-portal="${invoice.id}">Dela</button>` : ""}
             ${getCurrentUser().role === "customer" && ["created", "sent", "overdue"].includes(status) ? `<button class="primary-button small-button" type="button" data-portal-invoice-action="approve" data-portal-invoice-id="${invoice.id}">Godkänn</button>` : ""}
             ${getCurrentUser().role === "customer" && ["created", "sent", "overdue", "customerApproved"].includes(status) ? `<button class="ghost-button small-button" type="button" data-portal-invoice-action="change" data-portal-invoice-id="${invoice.id}">Fråga om ändring</button>` : ""}
           </div>
@@ -3081,6 +3609,130 @@ function renderPortal() {
   if (els.portalNewTask) {
     els.portalNewTask.hidden = !(isAdminUser() || isOwnerUser());
   }
+}
+
+function renderCollaboration() {
+  if (!els.collaborationSummary || !els.collaborationFeed || !els.collaborationPermissions) return;
+  const visibleTasks = (state.portalTasks || [])
+    .filter((task) => isClientVisible(getClient(task.clientId)))
+    .sort((a, b) => (a.status === "done") - (b.status === "done") || String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
+  const openTasks = visibleTasks.filter((task) => task.status !== "done");
+  const sharedAgreements = state.agreements.filter((agreement) => isClientVisible(getClient(agreement.clientId)) && getEffectiveAgreementStatus(agreement) !== "archived");
+  const waitingSignatures = state.esignatures.filter((signature) => isClientVisible(getClient(signature.clientId)) && ["draft", "sent"].includes(getEffectiveEsignStatus(signature)));
+  const customerUsers = state.users.filter((user) => user.role === "customer" && isClientVisible(getClient(user.clientId)));
+
+  els.collaborationSummary.innerHTML = `
+    <div><span>${icon("messages")} Ã–ppna trÃ¥dar</span><strong>${openTasks.length}</strong></div>
+    <div><span>${icon("file-certificate")} Delade avtal</span><strong>${sharedAgreements.length}</strong></div>
+    <div><span>${icon("signature")} VÃ¤ntar signering</span><strong>${waitingSignatures.length}</strong></div>
+    <div><span>${icon("users")} KundanvÃ¤ndare</span><strong>${customerUsers.length}</strong></div>
+  `;
+
+  if (!visibleTasks.length) {
+    renderEmpty(els.collaborationFeed);
+  } else {
+    els.collaborationFeed.innerHTML = visibleTasks.slice(0, 8).map((task) => {
+      const client = getClient(task.clientId);
+      return `
+        <div class="workflow-card">
+          <span class="badge ${getPortalStatusBadgeClass(task.status)}">${getPortalStatusLabel(task.status)}</span>
+          <strong>${escapeHtml(task.title)}</strong>
+          <p>${escapeHtml(client?.name || "OkÃ¤nd kund")} Â· ${escapeHtml(task.type || "Ã„rende")} Â· fÃ¶rfaller ${task.dueDate || "-"}</p>
+          ${task.message ? `<small class="review-note">${escapeHtml(task.message)}</small>` : ""}
+          <div class="row-actions">
+            <button class="ghost-button small-button" type="button" data-collab-client="${task.clientId}">${icon("address-book")} Kundkort</button>
+            <button class="primary-button small-button" type="button" data-collab-portal="${task.clientId}">${icon("external-link")} Portal</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  const portalClients = state.clients
+    .filter(isClientVisible)
+    .filter((client) => client.name !== "Intern byrÃ¥")
+    .slice(0, 10);
+  els.collaborationPermissions.innerHTML = portalClients.map((client) => {
+    const users = customerUsers.filter((user) => user.clientId === client.id);
+    const tasks = visibleTasks.filter((task) => task.clientId === client.id && task.status !== "done");
+    return `
+      <div class="permission-row">
+        <div>
+          <strong>${escapeHtml(client.name)}</strong>
+          <span>${users.length ? users.map((user) => escapeHtml(user.name)).join(", ") : "Ingen kundanvÃ¤ndare kopplad"} Â· ${tasks.length} Ã¶ppna Ã¤renden</span>
+        </div>
+        <button class="ghost-button small-button" type="button" data-collab-portal="${client.id}">${icon("share")} Ã–ppna</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function getVersionBlueprints() {
+  return [
+    {
+      id: "spiris-workspace",
+      title: "Spiris-lik arbetsyta",
+      status: "Aktiv",
+      active: true,
+      view: "dashboard",
+      copy: "Toppbar, sidomeny, snabbvÃ¤gar, startflÃ¶de och notiser i samma arbetssÃ¤tt som referenskontot."
+    },
+    {
+      id: "invoice-flow",
+      title: "UtÃ¶kat fakturaflÃ¶de",
+      status: "NÃ¤sta",
+      view: "invoice",
+      copy: "PreliminÃ¤ra underlag, utkast, filter, varningar och kundgodkÃ¤nnande innan faktura skapas."
+    },
+    {
+      id: "time-engine",
+      title: "Tidsklocka och mÃ¥nadsregistrering",
+      status: "Aktiv",
+      active: true,
+      view: "time",
+      copy: "Live-timer, manuell tidsrad, status, lÃ¶neunderlag, debiterbar tid och periodattest."
+    },
+    {
+      id: "customer-collaboration",
+      title: "Samarbete och kundportal",
+      status: "Aktiv",
+      active: true,
+      view: "collaboration",
+      copy: "Delade uppgifter, uppladdade underlag, avtal, fakturor och kundanvÃ¤ndare i ett sammanhÃ¥llet flÃ¶de."
+    },
+    {
+      id: "cloud-rollout",
+      title: "Supabase-konton och godkÃ¤nnande",
+      status: "Test",
+      view: "portal",
+      copy: "KontoansÃ¶kan, adminbeslut och rollstyrning fÃ¶r kommande publicering pÃ¥ hemsidan."
+    }
+  ];
+}
+
+function renderVersions() {
+  if (!els.versionsSummary || !els.versionGrid) return;
+  const blueprints = getVersionBlueprints();
+  const activeCount = blueprints.filter((item) => item.active).length;
+  const nextCount = blueprints.filter((item) => item.status === "NÃ¤sta").length;
+  els.versionsSummary.innerHTML = `
+    <div><span>${icon("toggle-right")} Aktiva versioner</span><strong>${activeCount}</strong></div>
+    <div><span>${icon("flask")} Testytor</span><strong>${blueprints.length - activeCount}</strong></div>
+    <div><span>${icon("route")} NÃ¤sta pass</span><strong>${nextCount}</strong></div>
+    <div><span>${icon("layers-intersect")} Moduler</span><strong>${Object.keys(viewTitles).length}</strong></div>
+  `;
+  els.versionGrid.innerHTML = blueprints.map((item) => `
+    <div class="analysis-card ${item.active ? "active-version" : ""}">
+      <span class="badge ${item.active ? "approved" : "submitted"}">${escapeHtml(item.status)}</span>
+      <strong>${escapeHtml(item.title)}</strong>
+      <p>${escapeHtml(item.copy)}</p>
+      <div class="version-status-row">
+        <button class="${item.active ? "ghost-button" : "primary-button"} small-button" type="button" data-version-activate="${item.view}">
+          ${icon(item.active ? "eye" : "rocket")} ${item.active ? "Visa" : "Aktivera i prototyp"}
+        </button>
+      </div>
+    </div>
+  `).join("");
 }
 
 function createPortalTaskForCurrentClient() {
@@ -3117,6 +3769,21 @@ function createPortalTaskForCurrentClient() {
   showToast("Uppgift skapades i kundportalen.");
 }
 
+function addPortalTaskComment(task, body, author = getCurrentUser().name, role = getPortalCommentRole()) {
+  task.comments = [
+    ...(task.comments || []),
+    {
+      id: makeId(),
+      author,
+      role,
+      body,
+      createdAt: isoToday
+    }
+  ];
+  task.lastActivityAt = isoToday;
+  task.lastActivityBy = author;
+}
+
 function handlePortalTaskAction(action, taskId) {
   const task = (state.portalTasks || []).find((item) => item.id === taskId);
   if (!task) return;
@@ -3125,6 +3792,8 @@ function handlePortalTaskAction(action, taskId) {
     task.status = "done";
     task.completedAt = isoToday;
     task.completedBy = getCurrentUser().name;
+    task.waitingOn = "";
+    addPortalTaskComment(task, "Ärendet markerades som klart.");
     showToast("Ärendet markerades som klart.");
   }
 
@@ -3138,12 +3807,16 @@ function handlePortalTaskAction(action, taskId) {
   if (action === "reject" && (isAdminUser() || isOwnerUser())) {
     task.status = "rejected";
     task.message = `${task.message || ""}${task.message ? " " : ""}Behöver kompletteras.`;
+    task.waitingOn = "customer";
+    addPortalTaskComment(task, "Byrån begär komplettering från kund.");
     showToast("Ärendet markerades för komplettering.");
   }
 
   if (action === "reopen" && (isAdminUser() || isOwnerUser())) {
     task.status = "open";
     task.completedAt = "";
+    task.waitingOn = "office";
+    addPortalTaskComment(task, "Ärendet öppnades igen.");
     showToast("Ärendet öppnades igen.");
   }
 
@@ -3187,6 +3860,7 @@ async function handlePortalUploadSubmit(form) {
 
   state.receipts.unshift(receipt);
   task.status = "submitted";
+  task.waitingOn = "office";
   task.uploads = [
     ...(task.uploads || []),
     {
@@ -3199,16 +3873,7 @@ async function handlePortalUploadSubmit(form) {
       uploadedAt: isoToday
     }
   ];
-  task.comments = [
-    ...(task.comments || []),
-    {
-      id: makeId(),
-      author: getCurrentUser().name,
-      role: getPortalCommentRole(),
-      body: `Skickade in underlag: ${receipt.fileName || receipt.supplier}.`,
-      createdAt: isoToday
-    }
-  ];
+  addPortalTaskComment(task, `Skickade in underlag: ${receipt.fileName || receipt.supplier}.`);
   saveState();
   renderAll();
   showToast("Underlaget skickades in och hamnade i kvitto-/dokumentflödet.");
@@ -3219,19 +3884,16 @@ function handlePortalCommentSubmit(form) {
   if (!task) return;
   const body = form.elements.body.value.trim();
   if (!body) return;
-  task.comments = [
-    ...(task.comments || []),
-    {
-      id: makeId(),
-      author: getCurrentUser().name,
-      role: getPortalCommentRole(),
-      body,
-      createdAt: isoToday
-    }
-  ];
+  addPortalTaskComment(task, body);
   if (task.status === "done") {
     task.status = "open";
     task.completedAt = "";
+    task.waitingOn = "office";
+  } else if (getCurrentUser().role === "customer" && ["waiting", "rejected"].includes(task.status)) {
+    task.status = "submitted";
+    task.waitingOn = "office";
+  } else if (getCurrentUser().role !== "customer") {
+    task.waitingOn = "customer";
   }
   saveState();
   renderAll();
@@ -3241,9 +3903,19 @@ function handlePortalCommentSubmit(form) {
 function createInvoicePortalTask(invoice, message) {
   const client = getClient(invoice.clientId);
   const project = getProject(invoice.projectId);
-  state.portalTasks.unshift({
+  const existingTask = (state.portalTasks || []).find((item) => item.id === invoice.portalTaskId || item.invoiceId === invoice.id);
+  if (existingTask) {
+    existingTask.status = existingTask.status === "done" ? "open" : existingTask.status;
+    existingTask.waitingOn = "customer";
+    existingTask.dueDate = existingTask.dueDate || offsetDate(3);
+    addPortalTaskComment(existingTask, message);
+    return existingTask;
+  }
+  const task = {
     id: makeId(),
     clientId: invoice.clientId,
+    projectId: invoice.projectId,
+    invoiceId: invoice.id,
     title: `Fråga om faktura ${invoice.number}`,
     type: "Faktura",
     status: "open",
@@ -3251,6 +3923,9 @@ function createInvoicePortalTask(invoice, message) {
     dueDate: offsetDate(3),
     createdAt: isoToday,
     message,
+    waitingOn: "customer",
+    lastActivityAt: isoToday,
+    lastActivityBy: getCurrentUser().name,
     uploads: [],
     comments: [
       {
@@ -3261,7 +3936,38 @@ function createInvoicePortalTask(invoice, message) {
         createdAt: isoToday
       }
     ]
-  });
+  };
+  state.portalTasks.unshift(task);
+  return task;
+}
+
+function shareInvoiceToPortal(invoiceId, options = {}) {
+  const settings = { navigate: true, toast: true, ...options };
+  const invoice = (state.invoices || []).find((item) => item.id === invoiceId);
+  if (!invoice) return false;
+  const client = getClient(invoice.clientId);
+  if (!client) {
+    showToast("Fakturan saknar kundkoppling.", "warning");
+    return false;
+  }
+  const amount = formatSEK(Number(invoice.totalInclVat || invoice.total || 0));
+  const message = `Hej, faktura ${invoice.number} på ${amount} finns nu för granskning i kundportalen. Svara här om något behöver justeras.`;
+  const task = createInvoicePortalTask(invoice, message);
+  invoice.status = "sent";
+  invoice.sentAt = invoice.sentAt || isoToday;
+  invoice.portalSharedAt = isoToday;
+  invoice.portalTaskId = task.id;
+  addInvoiceEvent(invoice, "Delad till kundportal", `Kund: ${client.name}`);
+  syncInvoicePortalTask(invoice, "sent");
+  saveState();
+  renderAll();
+  if (els.portalClient) els.portalClient.value = invoice.clientId;
+  if (settings.navigate) {
+    setView("portal");
+    renderPortal();
+  }
+  if (settings.toast) showToast(`Faktura ${invoice.number} skickades till kundportalen.`);
+  return true;
 }
 
 function handlePortalInvoiceAction(action, invoiceId) {
@@ -3272,6 +3978,12 @@ function handlePortalInvoiceAction(action, invoiceId) {
     invoice.status = "customerApproved";
     invoice.customerApprovedAt = isoToday;
     invoice.customerApprovedBy = getCurrentUser().name;
+    const task = (state.portalTasks || []).find((item) => item.id === invoice.portalTaskId || item.invoiceId === invoice.id);
+    if (task) {
+      task.status = "submitted";
+      task.waitingOn = "office";
+      addPortalTaskComment(task, `Kunden godkände faktura ${invoice.number}.`);
+    }
     showToast("Fakturan markerades som godkänd av kund.");
   }
 
@@ -3282,12 +3994,35 @@ function handlePortalInvoiceAction(action, invoiceId) {
     invoice.changeRequestedAt = isoToday;
     invoice.changeRequestedBy = getCurrentUser().name;
     invoice.changeRequestMessage = message.trim();
-    createInvoicePortalTask(invoice, message.trim());
+    const task = createInvoicePortalTask(invoice, message.trim());
+    task.status = "open";
+    task.waitingOn = "office";
+    invoice.portalTaskId = task.id;
     showToast("Ändringsfrågan skickades till byrån och blev ett portalärende.");
   }
 
   saveState();
   renderAll();
+}
+
+function handlePortalFocus(focus) {
+  selectedPortalFocus = focus || "all";
+  renderPortal();
+  const targetMap = {
+    all: els.portalSummary,
+    tasks: els.portalTaskList,
+    invoices: els.portalInvoices,
+    agreements: els.portalAgreements,
+    documents: els.portalDocuments
+  };
+  const target = targetMap[selectedPortalFocus];
+  if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  showToast(`Visar portalens ${({
+    tasks: "ärenden",
+    invoices: "fakturor",
+    agreements: "avtal",
+    documents: "underlag"
+  }[selectedPortalFocus] || "översikt")}.`);
 }
 
 function getTaskWorkflowItems() {
@@ -3342,10 +4077,14 @@ function renderTasks() {
     <div><span>Klart senaste flödet</span><strong>${tasks.filter((task) => ["done", "approved"].includes(task.status)).length}</strong></div>
   `;
 
-  if (!tasks.length) {
+  const visibleTasks = selectedTaskStatus === "all"
+    ? tasks
+    : tasks.filter((task) => task.status === selectedTaskStatus || (selectedTaskStatus === "open" && !["done", "approved", "signed", "paid", "invoiced"].includes(task.status)));
+
+  if (!visibleTasks.length) {
     renderEmpty(els.tasksBoard);
   } else {
-    els.tasksBoard.innerHTML = tasks.map((task) => `
+    els.tasksBoard.innerHTML = visibleTasks.map((task) => `
       <div class="workflow-card">
         <div>
           <div class="approval-title">
@@ -3364,18 +4103,23 @@ function renderTasks() {
   }
 
   const pipeline = [
+    ["all", "Alla"],
     ["open", "Öppen"],
     ["waiting", "Väntar"],
     ["submitted", "Skickad"],
     ["done", "Klar"]
   ];
   els.tasksPipeline.innerHTML = pipeline.map(([status, label]) => {
-    const count = tasks.filter((task) => task.status === status).length;
+    const count = status === "all"
+      ? tasks.length
+      : status === "open"
+        ? openTasks.length
+        : tasks.filter((task) => task.status === status).length;
     return `
-      <div class="pipeline-row">
+      <button class="pipeline-row ${selectedTaskStatus === status ? "active" : ""}" type="button" data-task-status-filter="${status}">
         <span>${label}</span>
         <strong>${count}</strong>
-      </div>
+      </button>
     `;
   }).join("");
 }
@@ -3523,6 +4267,178 @@ function renderAnalysis() {
   `;
 }
 
+function getDayRegisterRows(entries, scheduleMultiplier = 1) {
+  const dates = getSelectedPeriodDates();
+  const visibleEntries = entries.filter((entry) => !selectedTimeEmployee || (entry.employee || getCurrentUser().name) === selectedTimeEmployee);
+  return dates.map((date) => {
+    const dayEntries = visibleEntries.filter((entry) => entry.date === date);
+    const reported = sumHours(dayEntries);
+    const absence = sumHours(dayEntries.filter((entry) => entry.type === "absence"));
+    const billable = sumHours(dayEntries.filter((entry) => entry.billable));
+    const weekday = new Date(`${date}T12:00:00`).getDay();
+    const scheduled = ([0, 6].includes(weekday) ? 0 : 8) * Math.max(1, scheduleMultiplier);
+    const draft = dayEntries.filter((entry) => ["draft", "rejected"].includes(entry.status || "draft")).length;
+    const submitted = dayEntries.filter((entry) => entry.status === "submitted").length;
+    const approved = dayEntries.filter((entry) => isInvoiceReady(entry.status) || entry.status === "invoiced").length;
+    const status = submitted ? "Väntar attest" : draft ? "Utkast" : approved ? "Attesterad" : reported ? "Kontrollera" : "Ej rapporterad";
+    return {
+      date,
+      dayEntries,
+      reported,
+      absence,
+      scheduled,
+      deviation: reported - scheduled,
+      billable,
+      draft,
+      submitted,
+      approved,
+      status
+    };
+  });
+}
+
+function getDayStatusBadgeClass(row) {
+  if (row.submitted) return "submitted";
+  if (row.draft) return "draft";
+  if (row.approved) return "approved";
+  return row.reported ? "rejected" : "neutral";
+}
+
+function renderTimeBlock(entry) {
+  const client = getClient(entry.clientId);
+  const project = getProject(entry.projectId);
+  const blockClass = entry.type === "absence" ? "absence" : entry.billable ? "billable" : "internal";
+  return `
+    <button class="time-block ${blockClass}" type="button" data-edit-entry="${escapeHtml(entry.id)}" title="${escapeHtml(entry.description || entry.task)}">
+      <strong>${escapeHtml(entry.task)}</strong>
+      <span>${formatHours(Number(entry.hours || 0))} · ${escapeHtml(client?.name || project?.name || entry.workOrder || "Intern tid")}</span>
+    </button>
+  `;
+}
+
+function getPeriodWorkflowSummary(entries, receipts, travels, totals) {
+  const draftEntries = entries.filter((entry) => ["draft", "rejected"].includes(entry.status || "draft")).length;
+  const submittedEntries = entries.filter((entry) => entry.status === "submitted").length;
+  const approvedEntries = entries.filter((entry) => isInvoiceReady(entry.status) || entry.status === "invoiced").length;
+  const draftExpenses = [
+    ...receipts.filter((receipt) => ["draft", "rejected"].includes(receipt.status || "draft")),
+    ...travels.filter((travel) => ["draft", "rejected"].includes(travel.status || "draft"))
+  ].length;
+  const submittedExpenses = [
+    ...receipts.filter((receipt) => receipt.status === "submitted"),
+    ...travels.filter((travel) => travel.status === "submitted")
+  ].length;
+  const invoiceValue = entries
+    .filter((entry) => entry.billable && isInvoiceReady(entry.status))
+    .reduce((sum, entry) => sum + Number(entry.hours || 0) * Number(getClient(entry.clientId)?.rate || 0), 0)
+    + receipts
+      .filter((receipt) => receipt.billable && isInvoiceReady(receipt.status))
+      .reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0)
+    + travels
+      .filter((travel) => travel.billable && isInvoiceReady(travel.status))
+      .reduce((sum, travel) => sum + getTravelValue(travel), 0);
+  const blockers = submittedEntries + submittedExpenses;
+  const drafts = draftEntries + draftExpenses;
+  const payrollHours = totals.payroll || 0;
+  return {
+    drafts,
+    submitted: blockers,
+    approved: approvedEntries,
+    invoiceValue,
+    payrollHours,
+    readyForInvoice: invoiceValue > 0 && blockers === 0,
+    nextLabel: blockers ? "Attestera inskickat" : drafts ? "Skicka utkast" : invoiceValue > 0 ? "Öppna fakturering" : "Lägg till tid",
+    nextAction: blockers ? "approval" : drafts ? "submit" : invoiceValue > 0 ? "invoice" : "new"
+  };
+}
+
+function renderMonthDayRegister(rows, totals, locked, workflow = {}) {
+  if (!els.monthDayBoard || !els.monthRegisterAside) return;
+  els.monthDayBoard.innerHTML = rows.map((row) => {
+    const date = new Date(`${row.date}T12:00:00`);
+    const dayName = new Intl.DateTimeFormat("sv-SE", { weekday: "short" }).format(date);
+    const isWeekend = [0, 6].includes(date.getDay());
+    return `
+      <tr class="${isWeekend ? "weekend-row" : ""}">
+        <td>
+          <strong>${escapeHtml(dayName.charAt(0).toUpperCase() + dayName.slice(1))}</strong>
+          <span class="table-subtext">${row.date}</span>
+        </td>
+        <td>
+          <div class="time-block-stack">
+            ${row.dayEntries.length ? row.dayEntries.map(renderTimeBlock).join("") : `<span class="empty-inline">Ingen tid</span>`}
+          </div>
+        </td>
+        <td>${formatHours(row.reported)}</td>
+        <td>${formatHours(row.absence)}</td>
+        <td>${formatHours(row.scheduled)}</td>
+        <td class="${row.deviation < 0 ? "danger-text" : ""}">${formatHours(row.deviation)}</td>
+        <td>${formatHours(row.billable)}</td>
+        <td><span class="badge ${getDayStatusBadgeClass(row)}">${escapeHtml(row.status)}</span></td>
+        <td>
+          <div class="row-actions">
+            <button class="mini-button" type="button" title="Ny tidsrad" aria-label="Ny tidsrad" data-time-day-new="${row.date}" ${locked ? "disabled" : ""}>
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+            </button>
+            ${row.submitted ? `
+              <button class="mini-button" type="button" title="Attestera dag" aria-label="Attestera dag" data-time-day-approve="${row.date}">
+                <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg>
+              </button>
+            ` : ""}
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  const activityRows = Object.entries(groupBy(
+    rows.flatMap((row) => row.dayEntries),
+    (entry) => entry.task || "Tidrapportering"
+  ))
+    .map(([task, taskEntries]) => ({ task, hours: sumHours(taskEntries), billable: sumHours(taskEntries.filter((entry) => entry.billable)) }))
+    .sort((a, b) => b.hours - a.hours)
+    .slice(0, 5);
+  const billableRate = totals.reported ? Math.round((totals.billable / totals.reported) * 100) : 0;
+  els.monthRegisterAside.innerHTML = `
+    <section>
+      <h3>Rapporterad/schemalagd tid</h3>
+      <div class="mini-chart-row"><span style="height:${Math.min(100, Math.max(8, totals.scheduled ? (totals.reported / totals.scheduled) * 100 : 8))}%"></span><span style="height:100%"></span></div>
+      <p>${formatHours(totals.reported)} rapporterat mot ${formatHours(totals.scheduled)} schema.</p>
+    </section>
+    <section>
+      <h3>Debiterbar tid</h3>
+      <div class="donut-lite" style="--value:${billableRate}%"><strong>${billableRate}%</strong></div>
+      <p>${formatHours(totals.billable)} debiterbart · ${formatHours(Math.max(totals.reported - totals.billable, 0))} ej debiterbart.</p>
+    </section>
+    <section>
+      <h3>Flöde till attest/faktura</h3>
+      <div class="workflow-steps">
+        <div class="${workflow.drafts ? "active" : "done"}"><strong>${workflow.drafts || 0}</strong><span>Utkast</span></div>
+        <div class="${workflow.submitted ? "active" : workflow.drafts ? "" : "done"}"><strong>${workflow.submitted || 0}</strong><span>Väntar attest</span></div>
+        <div class="${workflow.readyForInvoice ? "active" : ""}"><strong>${formatSEK(workflow.invoiceValue || 0)}</strong><span>Kan faktureras</span></div>
+      </div>
+      <div class="workflow-actions">
+        <button type="button" data-time-flow-action="${escapeHtml(workflow.nextAction || "approval")}">${escapeHtml(workflow.nextLabel || "Öppna attest")}</button>
+        <button type="button" data-time-flow-action="complete-period">Skicka + attestera</button>
+        <button type="button" data-time-flow-action="create-invoices">Skapa fakturor</button>
+        <button type="button" data-time-flow-action="invoice">Fakturering</button>
+      </div>
+    </section>
+    <section>
+      <h3>Fördelning aktiviteter</h3>
+      <div class="activity-breakdown">
+        ${activityRows.length ? activityRows.map((item) => `
+          <div><span>${escapeHtml(item.task)}</span><strong>${formatHours(item.hours)}</strong></div>
+        `).join("") : `<p>Ingen aktivitet i perioden.</p>`}
+      </div>
+    </section>
+    <section>
+      <h3>Löneunderlag</h3>
+      <p>${formatHours(totals.payroll)} på löneunderlag · ${formatHours(totals.absence)} frånvaro.</p>
+    </section>
+  `;
+}
+
 function renderTimePeriodOverview() {
   if (!els.timePeriodSummary || !els.timePeriodBoard) return;
   const entries = state.entries.filter(isEntryVisible).filter((entry) => isInSelectedTimePeriod(entry.date));
@@ -3536,6 +4452,7 @@ function renderTimePeriodOverview() {
     ...entries.map((entry) => entry.employee || getCurrentUser().name),
     ...state.users.filter((user) => user.role !== "customer").map((user) => user.name)
   ])].filter(Boolean);
+  const scheduledHoursForPeriod = getScheduledHoursForSelectedPeriod();
 
   const rows = employees.map((employee) => {
     const employeeEntries = entries.filter((entry) => (entry.employee || getCurrentUser().name) === employee);
@@ -3543,7 +4460,7 @@ function renderTimePeriodOverview() {
     const submittedTravels = travels.filter((travel) => (travel.employee || getCurrentUser().name) === employee && travel.status === "submitted").length;
     const reported = sumHours(employeeEntries);
     const absence = sumHours(employeeEntries.filter((entry) => entry.type === "absence"));
-    const scheduled = employeeEntries.length ? employeeEntries.reduce((total, entry) => total + Number(entry.scheduledHours || 8), 0) : 40;
+    const scheduled = scheduledHoursForPeriod;
     const billable = sumHours(employeeEntries.filter((entry) => entry.billable));
     const submitted = employeeEntries.filter((entry) => entry.status === "submitted").length + submittedReceipts + submittedTravels;
     const approved = employeeEntries.filter((entry) => isInvoiceReady(entry.status) || entry.status === "invoiced").length;
@@ -3564,6 +4481,20 @@ function renderTimePeriodOverview() {
   const totalBillable = rows.reduce((sum, row) => sum + row.billable, 0);
   const totalScheduled = rows.reduce((sum, row) => sum + row.scheduled, 0);
   const waitingCount = rows.reduce((sum, row) => sum + row.submitted, 0);
+  const totalAbsence = rows.reduce((sum, row) => sum + row.absence, 0);
+  const draftCount = entries.filter((entry) => ["draft", "rejected"].includes(entry.status || "draft")).length;
+  const submittedCount = entries.filter((entry) => entry.status === "submitted").length;
+  const approvedCount = entries.filter((entry) => isInvoiceReady(entry.status) || entry.status === "invoiced").length;
+  const locked = isSelectedTimePeriodLocked();
+  const dayRows = getDayRegisterRows(entries, selectedTimeEmployee ? 1 : rows.length || 1);
+  const dayTotals = {
+    reported: dayRows.reduce((sum, row) => sum + row.reported, 0),
+    scheduled: dayRows.reduce((sum, row) => sum + row.scheduled, 0),
+    billable: dayRows.reduce((sum, row) => sum + row.billable, 0),
+    absence: dayRows.reduce((sum, row) => sum + row.absence, 0),
+    payroll: entries.filter((entry) => entry.payroll).reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+  };
+  const workflow = getPeriodWorkflowSummary(entries, receipts, travels, dayTotals);
 
   els.timePeriodSummary.innerHTML = `
     <div><span>Period</span><strong>${escapeHtml(getTimePeriodLabel())}</strong></div>
@@ -3571,35 +4502,91 @@ function renderTimePeriodOverview() {
     <div><span>Schemalagt</span><strong>${formatHours(totalScheduled)}</strong></div>
     <div><span>Avvikelse</span><strong>${formatHours(totalReported - totalScheduled)}</strong></div>
     <div><span>Debiterbart</span><strong>${formatHours(totalBillable)}</strong></div>
+    <div><span>Frånvaro</span><strong>${formatHours(totalAbsence)}</strong></div>
     <div><span>Väntar attest</span><strong>${waitingCount}</strong></div>
+    <div><span>Status</span><strong>${locked ? "Låst" : "Öppen"}</strong></div>
   `;
+
+  if (els.timeStatusSummary) {
+    const billableRate = totalReported ? Math.round((totalBillable / totalReported) * 100) : 0;
+    els.timeStatusSummary.innerHTML = `
+      <div>
+        <strong>${formatHours(totalReported)} rapporterat · ${billableRate}% debiterbart</strong>
+        <span>${draftCount} utkast · ${submittedCount} inskickade · ${approvedCount} attesterade/fakturerade · ${formatSEK(workflow.invoiceValue)} kan faktureras</span>
+      </div>
+      <div class="summary-actions">
+        <button type="button" data-time-flow-action="${escapeHtml(workflow.nextAction)}">${escapeHtml(workflow.nextLabel)}</button>
+        <button type="button" data-time-flow-action="complete-period">Skicka + attestera</button>
+        <button type="button" data-time-flow-action="approve-period">Attestera period</button>
+        <button type="button" data-time-flow-action="create-invoices">Skapa fakturor</button>
+        <button type="button" data-time-flow-action="approval">Attestflöde</button>
+        <button type="button" data-time-flow-action="invoice">Fakturering</button>
+        <button type="button" data-time-status-filter="all">Alla rader</button>
+        <button type="button" data-time-status-filter="draft">Visa utkast</button>
+        <button type="button" data-time-status-filter="submitted">Visa inskickade</button>
+        <button type="button" data-time-status-filter="approved">Visa attesterade</button>
+      </div>
+    `;
+  }
+
+  if (els.timeLockPeriod) {
+    els.timeLockPeriod.textContent = locked ? "Lås upp period" : (selectedTimePeriodMode === "month" ? "Lås månad" : "Lås period");
+    els.timeLockPeriod.classList.toggle("active", locked);
+  }
+  if (els.timeSubmitPeriod) els.timeSubmitPeriod.disabled = locked;
+  if (els.timeAttestMonth) {
+    els.timeAttestMonth.textContent = selectedTimePeriodMode === "month" ? "Attestera månad" : "Attestera period";
+  }
+
+  renderMonthDayRegister(dayRows, dayTotals, locked, workflow);
 
   if (!rows.length) {
     els.timePeriodBoard.innerHTML = `<tr><td colspan="8">${els.emptyTemplate.innerHTML}</td></tr>`;
     return;
   }
 
-  els.timePeriodBoard.innerHTML = rows.map((row) => `
-    <tr>
-      <td>
-        <button class="link-button" type="button" data-time-employee="${escapeHtml(row.employee)}">${escapeHtml(row.employee)}</button>
-      </td>
-      <td>${formatHours(row.reported)}</td>
-      <td>${formatHours(row.absence)}</td>
-      <td>${formatHours(row.scheduled)}</td>
-      <td class="${row.deviation < 0 ? "danger-text" : ""}">${formatHours(row.deviation)}</td>
-      <td>${formatHours(row.billable)}</td>
-      <td>
-        <span class="badge ${row.submitted ? "submitted" : row.status === "Attesterad" ? "approved" : "draft"}">${escapeHtml(row.status)}</span>
-        ${row.submitted ? `<button class="ghost-button small-button" type="button" data-time-approve-employee="${escapeHtml(row.employee)}">Attestera</button>` : ""}
-      </td>
-      <td>
-        <button class="mini-button" type="button" title="Ny tidsrad" aria-label="Ny tidsrad" data-time-new-row="${escapeHtml(row.employee)}">
-          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
-        </button>
-      </td>
-    </tr>
-  `).join("");
+  const expanded = els.timePeriodBoard.classList.contains("expanded");
+  els.timePeriodBoard.innerHTML = rows.map((row) => {
+    const employeeEntries = entries.filter((entry) => (entry.employee || getCurrentUser().name) === row.employee);
+    const detailRows = employeeEntries
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+      .map((entry) => {
+        const client = getClient(entry.clientId);
+        const project = getProject(entry.projectId);
+        return `${entry.date} · ${client?.name || "Intern tid"} · ${project?.name || entry.workOrder || entry.task} · ${formatHours(Number(entry.hours || 0))} · ${getApprovalStatusLabel(entry.status)}`;
+      });
+    return `
+      <tr>
+        <td>
+          <button class="link-button" type="button" data-time-employee="${escapeHtml(row.employee)}">${escapeHtml(row.employee)}</button>
+        </td>
+        <td>${formatHours(row.reported)}</td>
+        <td>${formatHours(row.absence)}</td>
+        <td>${formatHours(row.scheduled)}</td>
+        <td class="${row.deviation < 0 ? "danger-text" : ""}">${formatHours(row.deviation)}</td>
+        <td>${formatHours(row.billable)}</td>
+        <td>
+          <span class="badge ${row.submitted ? "submitted" : row.status === "Attesterad" ? "approved" : "draft"}">${escapeHtml(row.status)}</span>
+          ${row.submitted ? `<button class="ghost-button small-button" type="button" data-time-approve-employee="${escapeHtml(row.employee)}">Attestera</button>` : ""}
+        </td>
+        <td>
+          <button class="mini-button" type="button" title="Ny tidsrad" aria-label="Ny tidsrad" data-time-new-row="${escapeHtml(row.employee)}" ${locked ? "disabled" : ""}>
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+        </td>
+      </tr>
+      ${expanded ? `
+        <tr class="time-block-detail">
+          <td colspan="8">
+            ${detailRows.length
+              ? detailRows.map((line) => `<span>${escapeHtml(line)}</span>`).join("")
+              : "<span>Inga tidsrader i perioden.</span>"
+            }
+          </td>
+        </tr>
+      ` : ""}
+    `;
+  }).join("");
 }
 
 function renderInvoiceCommandStrip() {
@@ -3607,17 +4594,71 @@ function renderInvoiceCommandStrip() {
   const rows = getInvoiceRows();
   const totals = getInvoiceWorkbenchTotals(rows);
   const draftRows = state.projects.filter((project) => project.invoiceStatus === "draft");
+  const visibleProjectIds = getInvoiceProjectIdsFromRows(rows);
+  const blockedProjectIds = getInvoiceProjectIdsFromRows(totals.blockedRows);
+  const invoiceQueue = (state.invoices || []).filter((invoice) => !["paid", "credited", "reopened"].includes(getEffectiveInvoiceStatus(invoice)));
+  const notSentInvoices = invoiceQueue.filter((invoice) => getEffectiveInvoiceStatus(invoice) === "created");
+  const waitingCustomerInvoices = invoiceQueue.filter((invoice) => ["sent", "overdue"].includes(getEffectiveInvoiceStatus(invoice)));
+  const overdueInvoices = invoiceQueue.filter((invoice) => getEffectiveInvoiceStatus(invoice) === "overdue");
+  const changeRequestInvoices = invoiceQueue.filter((invoice) => getEffectiveInvoiceStatus(invoice) === "changeRequested");
+  const customerApprovedInvoices = invoiceQueue.filter((invoice) => getEffectiveInvoiceStatus(invoice) === "customerApproved");
+  const paidInvoices = (state.invoices || []).filter((invoice) => getEffectiveInvoiceStatus(invoice) === "paid");
+  const openInvoiceValue = [...notSentInvoices, ...waitingCustomerInvoices, ...changeRequestInvoices, ...customerApprovedInvoices]
+    .reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0);
+  const latestInvoice = getSortedInvoices()[0];
 
   els.invoiceCommandStrip.innerHTML = `
+    <div class="invoice-pipeline-panel">
+      <button type="button" data-invoice-command="warnings" class="${totals.blockedRows.length ? "blocked" : "done"}">
+        <span>1</span>
+        <strong>Attest</strong>
+        <small>${totals.blockedRows.length ? `${totals.blockedRows.length} spärrade underlag` : "Allt synligt är attesterat"}</small>
+      </button>
+      <button type="button" data-invoice-command="customer-data" class="${totals.customerIssueRows.length ? "blocked" : "done"}">
+        <span>2</span>
+        <strong>Kunddata</strong>
+        <small>${totals.customerIssueRows.length ? `${totals.customerIssueRows.length} behöver kompletteras` : "Kunddata är klar"}</small>
+      </button>
+      <button type="button" data-invoice-command="create-ready" class="${totals.readyRows.length ? "active" : ""}">
+        <span>3</span>
+        <strong>Skapa</strong>
+        <small>${totals.readyRows.length} klara · ${formatCurrency(totals.readyRows.reduce((sum, row) => sum + row.total, 0))}</small>
+      </button>
+      <button type="button" data-invoice-command="share-created" class="${notSentInvoices.length ? "active" : ""}">
+        <span>4</span>
+        <strong>Skicka</strong>
+        <small>${notSentInvoices.length} skapade väntar</small>
+      </button>
+      <button type="button" data-invoice-command="open-customer" class="${waitingCustomerInvoices.length ? "active" : ""}">
+        <span>5</span>
+        <strong>Kund</strong>
+        <small>${waitingCustomerInvoices.length} hos kund · ${overdueInvoices.length} förfallna</small>
+      </button>
+      <button type="button" data-invoice-command="open-payment" class="${customerApprovedInvoices.length ? "ready" : ""}">
+        <span>6</span>
+        <strong>Betalning</strong>
+        <small>${customerApprovedInvoices.length} godkända · ${formatCurrency(openInvoiceValue)}</small>
+      </button>
+    </div>
     <button class="invoice-command-card" type="button" data-invoice-command="create-ready">
-      <span>Skapa klara underlag</span>
+      <span>1. Skapa klara</span>
       <strong>${totals.readyRows.length}</strong>
       <small>${formatCurrency(totals.readyRows.reduce((sum, row) => sum + row.total, 0))}</small>
     </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="draft-visible">
+      <span>2. Spara utkast</span>
+      <strong>${visibleProjectIds.length}</strong>
+      <small>Respekterar sök, datum och status</small>
+    </button>
     <button class="invoice-command-card" type="button" data-invoice-command="drafts">
-      <span>Utkast</span>
+      <span>3. Granska utkast</span>
       <strong>${draftRows.length}</strong>
       <small>Kan granskas före utskick</small>
+    </button>
+    <button class="invoice-command-card warning" type="button" data-invoice-command="approve-blocked">
+      <span>Attestera spärrar</span>
+      <strong>${blockedProjectIds.length}</strong>
+      <small>Godkänn synliga blockerade rader</small>
     </button>
     <button class="invoice-command-card warning" type="button" data-invoice-command="warnings">
       <span>Behöver åtgärd</span>
@@ -3634,7 +4675,70 @@ function renderInvoiceCommandStrip() {
       <strong>${formatCurrency(totals.net)}</strong>
       <small>${formatCurrency(totals.vat)} moms · ${formatCurrency(totals.gross)} totalt</small>
     </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="share-created">
+      <span>Ej skickade</span>
+      <strong>${notSentInvoices.length}</strong>
+      <small>Skicka till kundportal</small>
+    </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="open-customer">
+      <span>Väntar kund</span>
+      <strong>${waitingCustomerInvoices.length}</strong>
+      <small>Skickade/förfallna fakturor</small>
+    </button>
+    <button class="invoice-command-card warning" type="button" data-invoice-command="open-overdue">
+      <span>Förfallna</span>
+      <strong>${overdueInvoices.length}</strong>
+      <small>Behöver påminnelse</small>
+    </button>
+    <button class="invoice-command-card warning" type="button" data-invoice-command="open-changes">
+      <span>Ändringar</span>
+      <strong>${changeRequestInvoices.length}</strong>
+      <small>Kundfrågor att hantera</small>
+    </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="open-approved">
+      <span>Godkända</span>
+      <strong>${customerApprovedInvoices.length}</strong>
+      <small>Redo att följa upp betalning</small>
+    </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="mark-approved-paid">
+      <span>Bokför betalda</span>
+      <strong>${customerApprovedInvoices.length}</strong>
+      <small>Markera kundgodkända som betalda</small>
+    </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="portal-invoices">
+      <span>Kundportal</span>
+      <strong>${waitingCustomerInvoices.length + changeRequestInvoices.length}</strong>
+      <small>Öppna fakturor hos kund</small>
+    </button>
+    <button class="invoice-command-card" type="button" data-invoice-command="open-latest" ${latestInvoice ? "" : "disabled"}>
+      <span>Senaste faktura</span>
+      <strong>${latestInvoice ? escapeHtml(latestInvoice.number) : "-"}</strong>
+      <small>${latestInvoice ? escapeHtml(getInvoiceNextAction(latestInvoice).label) : "Ingen faktura skapad"}</small>
+    </button>
   `;
+
+  if (els.invoiceStatusSummary) {
+    const rowLabel = rows.length === 1 ? "underlag" : "underlag";
+    els.invoiceStatusSummary.innerHTML = `
+      <div>
+        <strong>${rows.length} ${rowLabel} i urvalet</strong>
+        <span>${totals.readyRows.length} klara · ${totals.blockedRows.length} behöver attest · ${totals.customerIssueRows.length} behöver kunddata · ${overdueInvoices.length} förfallna · ${customerApprovedInvoices.length} kundgodkända · ${paidInvoices.length} betalda</span>
+        <div class="invoice-flow-hint">
+          <span class="${totals.blockedRows.length ? "blocked" : "done"}">Attest</span>
+          <span class="${totals.customerIssueRows.length ? "blocked" : "done"}">Kunddata</span>
+          <span class="${totals.readyRows.length ? "active" : ""}">Skapa</span>
+          <span class="${notSentInvoices.length ? "active" : ""}">Skicka</span>
+          <span class="${waitingCustomerInvoices.length ? "active" : ""}">Kund</span>
+          <span class="${customerApprovedInvoices.length ? "ready" : ""}">Betalning</span>
+        </div>
+      </div>
+      <div class="summary-actions">
+        <button type="button" data-invoice-summary-filter="ready">Visa klara</button>
+        <button type="button" data-invoice-summary-filter="blocked">Visa spärrar</button>
+        <button type="button" data-invoice-summary-filter="customer">Visa kunddata</button>
+      </div>
+    `;
+  }
 }
 
 function renderReportCatalog() {
@@ -3643,12 +4747,12 @@ function renderReportCatalog() {
   const favoritesOnly = els.reportShowFavorites?.classList.contains("active");
   const tags = [...new Set(reportDefinitions.map((report) => report.tag))];
   const reports = reportDefinitions.filter((report) => {
-    const haystack = `${report.title} ${report.tag} ${report.description}`.toLowerCase();
+    const haystack = `${report.code} ${report.title} ${report.tag} ${report.description} ${report.moduleLabel} ${report.owner} ${report.frequency} ${(report.keywords || []).join(" ")}`.toLowerCase();
     return (!query || haystack.includes(query)) && (!favoritesOnly || report.favorite);
   });
 
   els.reportTags.innerHTML = tags.map((tag) => `
-    <button class="tag-button" type="button" data-report-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>
+    <button class="tag-button ${query === tag.toLowerCase() ? "active" : ""}" type="button" data-report-tag="${escapeHtml(tag)}">${escapeHtml(tag)} <span>${reportDefinitions.filter((report) => report.tag === tag).length}</span></button>
   `).join("");
 
   if (!reports.length) {
@@ -3656,16 +4760,382 @@ function renderReportCatalog() {
     return;
   }
 
-  els.reportCatalog.innerHTML = reports.map((report) => `
-    <button class="analysis-card report-card" type="button" data-report-open="${escapeHtml(report.view)}" data-report-id="${escapeHtml(report.id)}">
-      <span class="analysis-icon">${escapeHtml(report.tag.slice(0, 2).toUpperCase())}</span>
+  els.reportCatalog.innerHTML = reports.map((report) => {
+    const rows = getReportRows(report.id);
+    const health = getReportHealth(report, rows);
+    return `
+    <button class="analysis-card report-card ${report.id === selectedReportId ? "active" : ""}" type="button" data-report-select="${escapeHtml(report.id)}">
+      <span class="report-card-head">
+        <span class="analysis-icon">${escapeHtml(report.tag.slice(0, 2).toUpperCase())}</span>
+        <span class="report-health ${escapeHtml(health.tone)}">${escapeHtml(health.label)}</span>
+      </span>
       <div>
         <strong>${escapeHtml(report.title)}</strong>
         <p>${escapeHtml(report.description)}</p>
+        <small class="report-code">${escapeHtml(report.code)} · ${escapeHtml(report.frequency)} · ${escapeHtml(report.owner)}</small>
       </div>
+      <span class="report-card-meta">
+        <span>${escapeHtml(report.moduleLabel)}</span>
+        <span>${rows.length} rader</span>
+        <span>${escapeHtml(health.detail)}</span>
+      </span>
       <b>${report.favorite ? "Favorit" : escapeHtml(report.tag)}</b>
     </button>
+  `;
+  }).join("");
+}
+
+function getReportDefinition(reportId = selectedReportId) {
+  return reportDefinitions.find((report) => report.id === reportId) || reportDefinitions[0];
+}
+
+function getReportHealth(report, rows = getReportRows(report.id)) {
+  const statuses = rows.map((row) => (row.status || "").toLowerCase());
+  const hasBlockingStatus = statuses.some((status) => /behöver|attest|öppet|följ upp|spärr|förfallen|ändring/.test(status));
+  if (!rows.length) {
+    return { label: "Tom", tone: "neutral", detail: "Inga rader" };
+  }
+  if (hasBlockingStatus) {
+    return { label: "Åtgärd", tone: "warning", detail: "Kräver kontroll" };
+  }
+  if (report.favorite) {
+    return { label: "Favorit", tone: "success", detail: "Redo" };
+  }
+  return { label: "Aktiv", tone: "info", detail: "Uppdaterad" };
+}
+
+function getReportRowTone(status = "") {
+  const normalized = status.toLowerCase();
+  if (/behöver|attest|öppet|följ upp|spärr|förfallen|ändring/.test(normalized)) return "warning";
+  if (/klar|godkänd|attesterad|betald|signerad/.test(normalized)) return "success";
+  if (/intern|utkast/.test(normalized)) return "neutral";
+  return "info";
+}
+
+function getReportRows(reportId = selectedReportId) {
+  if (reportId === "worked-time") {
+    const entries = state.entries.filter(isEntryVisible);
+    const rows = Object.entries(groupBy(entries, (entry) => `${entry.clientId || "internal"}|${entry.projectId || entry.workOrder || "none"}|${entry.task || "Aktivitet"}`))
+      .map(([key, items]) => {
+        const [clientId, projectKey, task] = key.split("|");
+        const client = getClient(clientId);
+        const project = getProject(projectKey);
+        const billable = sumHours(items.filter((entry) => entry.billable));
+        const total = sumHours(items);
+        return {
+          title: client?.name || "Intern tid",
+          subtitle: `${project?.name || items[0]?.workOrder || "Inget projekt"} · ${task}`,
+          value: formatHours(total),
+          meta: `${formatHours(billable)} debiterbart · ${total ? Math.round((billable / total) * 100) : 0}%`,
+          status: items.some((entry) => isApprovalOpen(entry.status)) ? "Behöver attest" : "Klar",
+          targetView: "time",
+          targetKind: "entry",
+          targetId: items[0]?.id,
+          clientId,
+          projectId: project?.id || "",
+          actionLabel: "Öppna tid"
+        };
+      });
+    return rows.sort((a, b) => parseFloat(b.value) - parseFloat(a.value));
+  }
+
+  if (reportId === "invoice-basis") {
+    return getInvoiceRows().map((row) => ({
+      title: row.project.name,
+      subtitle: row.client?.name || "Okänd kund",
+      value: formatCurrency(row.total),
+      meta: `${formatHours(row.hours)} fakturerbara timmar · ${formatCurrency(row.supplierInvoices + row.otherValue)} övrigt`,
+      status: getInvoiceReadinessLabel(row),
+      targetView: "invoice",
+      targetKind: "invoice-row",
+      targetId: row.project.id,
+      clientId: row.client?.id || row.project.clientId || "",
+      projectId: row.project.id,
+      actionLabel: "Öppna underlag"
+    }));
+  }
+
+  if (reportId === "payroll") {
+    const payrollEntries = state.entries.filter((entry) => isEntryVisible(entry) && entry.payroll);
+    const payrollReceipts = state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId) || {}) && receipt.payroll);
+    const payrollTravels = state.travels.filter((travel) => isClientVisible(getClient(travel.clientId) || {}) && travel.payroll);
+    const employees = [...new Set([
+      ...payrollEntries.map((entry) => entry.employee || getCurrentUser().name),
+      ...payrollReceipts.map((receipt) => receipt.employee || getCurrentUser().name),
+      ...payrollTravels.map((travel) => travel.employee || getCurrentUser().name)
+    ])].filter(Boolean);
+    return employees.map((employee) => {
+      const entries = payrollEntries.filter((entry) => (entry.employee || getCurrentUser().name) === employee);
+      const receipts = payrollReceipts.filter((receipt) => (receipt.employee || getCurrentUser().name) === employee);
+      const travels = payrollTravels.filter((travel) => (travel.employee || getCurrentUser().name) === employee);
+      const amount = receipts.reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0) + travels.reduce((sum, travel) => sum + getTravelValue(travel), 0);
+      return {
+        title: employee,
+        subtitle: `${formatHours(sumHours(entries.filter((entry) => entry.type === "absence")))} frånvaro · ${receipts.length} kvitton · ${travels.length} resor`,
+        value: formatHours(sumHours(entries)),
+        meta: `${formatSEK(amount)} ersättning/utlägg`,
+        status: entries.some((entry) => isApprovalOpen(entry.status)) ? "Öppet" : "Klar",
+        targetView: "time",
+        targetKind: "payroll",
+        employee,
+        actionLabel: "Öppna månad"
+      };
+    }).sort((a, b) => parseFloat(b.value) - parseFloat(a.value));
+  }
+
+  if (reportId === "receipts") {
+    return state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId) || {})).map((receipt) => ({
+      title: receipt.supplier,
+      subtitle: `${getClient(receipt.clientId)?.name || "Intern"} · ${getProject(receipt.projectId)?.name || "Inget projekt"}`,
+      value: formatCurrency(Number(receipt.amount || 0)),
+      meta: `${receipt.billable ? "Fakturerbar" : "Ej fakturerbar"} · ${receipt.payroll ? "På löneunderlag" : "Ej lön"}`,
+      status: getApprovalStatusLabel(receipt.status),
+      targetView: "time",
+      targetKind: "receipt",
+      targetId: receipt.id,
+      clientId: receipt.clientId,
+      projectId: receipt.projectId,
+      actionLabel: "Öppna kvitto"
+    })).sort((a, b) => parseFloat(b.value.replace(/\s/g, "")) - parseFloat(a.value.replace(/\s/g, "")));
+  }
+
+  if (reportId === "absence") {
+    const entries = state.entries.filter((entry) => isEntryVisible(entry) && entry.type === "absence");
+    return Object.entries(groupBy(entries, (entry) => entry.employee || "Okänd")).map(([employee, items]) => ({
+      title: employee,
+      subtitle: [...new Set(items.map((entry) => entry.task || "Frånvaro"))].join(", "),
+      value: formatHours(sumHours(items)),
+      meta: `${items.length} registreringar`,
+      status: items.some((entry) => isApprovalOpen(entry.status)) ? "Attest kvar" : "Klar",
+      targetView: "time",
+      targetKind: "entry",
+      targetId: items[0]?.id,
+      employee,
+      actionLabel: "Öppna frånvaro"
+    })).sort((a, b) => parseFloat(b.value) - parseFloat(a.value));
+  }
+
+  if (reportId === "internal") {
+    const entries = state.entries.filter((entry) => isEntryVisible(entry) && entry.type === "internal");
+    return Object.entries(groupBy(entries, (entry) => entry.task || "Internt")).map(([task, items]) => ({
+      title: task,
+      subtitle: [...new Set(items.map((entry) => entry.employee || "Okänd"))].join(", "),
+      value: formatHours(sumHours(items)),
+      meta: `${items.length} registreringar · ej debiterbart`,
+      status: "Intern",
+      targetView: "time",
+      targetKind: "entry",
+      targetId: items[0]?.id,
+      actionLabel: "Öppna interntid"
+    })).sort((a, b) => parseFloat(b.value) - parseFloat(a.value));
+  }
+
+  if (reportId === "customers") {
+    return state.clients.filter(isClientVisible).map((client) => {
+      const snapshot = getClientSnapshot(client.id);
+      return {
+        title: client.name,
+        subtitle: `${client.owner || "Ingen ansvarig"} · ${snapshot.projects.length} projekt · ${snapshot.agreements.length} avtal`,
+        value: formatCurrency(snapshot.invoiceValue),
+        meta: `${formatHours(snapshot.billableHours)} debiterbar tid · ${snapshot.draftItems.length} öppna underlag`,
+        status: snapshot.draftItems.length ? "Följ upp" : "Klar",
+        targetView: "clients",
+        targetKind: "client",
+        targetId: client.id,
+        clientId: client.id,
+        actionLabel: "Öppna kund"
+      };
+    }).sort((a, b) => parseFloat(b.value.replace(/\s/g, "")) - parseFloat(a.value.replace(/\s/g, "")));
+  }
+
+  if (reportId === "approvals") {
+    return getApprovalItems({ includeApproved: true }).map((item) => ({
+      title: item.title,
+      subtitle: item.subtitle,
+      value: item.value,
+      meta: `${item.owner || "Ingen ansvarig"} · ${item.date || "-"}`,
+      status: getApprovalStatusLabel(item.status),
+      targetView: "approvals",
+      targetKind: item.kind,
+      targetId: item.id,
+      actionLabel: "Öppna attest"
+    }));
+  }
+
+  return [];
+}
+
+function getReportActions(reportId = selectedReportId) {
+  const actions = [
+    { label: "Exportera CSV", action: "export" }
+  ];
+  if (reportId === "worked-time" || reportId === "absence" || reportId === "internal" || reportId === "receipts") {
+    actions.unshift({ label: "Öppna tidsvy", action: "time", primary: true });
+  }
+  if (reportId === "invoice-basis") actions.unshift({ label: "Gå till fakturering", action: "invoice", primary: true });
+  if (reportId === "customers") actions.unshift({ label: "Öppna kunder", action: "clients", primary: true });
+  if (reportId === "approvals") actions.unshift({ label: "Visa attestflöde", action: "approvals", primary: true });
+  if (reportId === "payroll") actions.unshift({ label: "Öppna löneunderlag", action: "payroll", primary: true });
+  return actions;
+}
+
+function getReportMetrics(reportId = selectedReportId, rows = getReportRows(reportId)) {
+  const entries = state.entries.filter(isEntryVisible);
+  const totalHours = sumHours(entries);
+  const billableHours = sumHours(entries.filter((entry) => entry.billable));
+  const invoiceRows = reportId === "invoice-basis" ? getInvoiceRows() : [];
+  if (reportId === "invoice-basis") {
+    return [
+      { label: "Underlag", value: String(invoiceRows.length) },
+      { label: "Att fakturera", value: formatCurrency(invoiceRows.reduce((sum, row) => sum + row.total, 0)) },
+      { label: "Behöver attest", value: String(invoiceRows.filter((row) => row.warning > 0).length) },
+      { label: "Klara", value: String(invoiceRows.filter(isInvoiceRowReady).length) }
+    ];
+  }
+  if (reportId === "payroll") {
+    return [
+      { label: "Medarbetare", value: String(rows.length) },
+      { label: "Lönetid", value: formatHours(sumHours(entries.filter((entry) => entry.payroll))) },
+      { label: "Frånvaro", value: formatHours(sumHours(entries.filter((entry) => entry.payroll && entry.type === "absence"))) },
+      { label: "Utlägg", value: formatSEK(state.receipts.filter((receipt) => receipt.payroll).reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0)) }
+    ];
+  }
+  if (reportId === "customers") {
+    return [
+      { label: "Kunder", value: String(rows.length) },
+      { label: "Öppna underlag", value: String(rows.reduce((sum, row) => sum + (row.status === "Följ upp" ? 1 : 0), 0)) },
+      { label: "Aktiva projekt", value: String(state.projects.filter((project) => project.status === "active").length) },
+      { label: "Avtal", value: String(state.agreements.length) }
+    ];
+  }
+  if (reportId === "approvals") {
+    const open = getApprovalItems().filter((item) => matchesApprovalStatusFilter(item, "open")).length;
+    return [
+      { label: "Totalt", value: String(rows.length) },
+      { label: "Öppna", value: String(open) },
+      { label: "Attesterade", value: String(rows.length - open) },
+      { label: "I urvalet", value: String(rows.length) }
+    ];
+  }
+  return [
+    { label: "Rader", value: String(rows.length) },
+    { label: "Totaltid", value: formatHours(totalHours) },
+    { label: "Debiterbart", value: formatHours(billableHours) },
+    { label: "Debiteringsgrad", value: `${totalHours ? Math.round((billableHours / totalHours) * 100) : 0}%` }
+  ];
+}
+
+function renderReportDetail() {
+  if (!els.reportDetailTitle || !els.reportResultList || !els.reportDetailMetrics) return;
+  const report = getReportDefinition();
+  const rows = getReportRows(report.id);
+  const metrics = getReportMetrics(report.id, rows);
+  els.reportDetailTitle.textContent = report.title;
+  els.reportDetailDescription.textContent = report.description;
+  els.reportDetailActions.innerHTML = getReportActions(report.id).map((action) => `
+    <button class="${action.primary ? "primary-button" : "ghost-button"} small-button" type="button" data-report-action="${escapeHtml(action.action)}">${escapeHtml(action.label)}</button>
   `).join("");
+  els.reportDetailMetrics.innerHTML = metrics.map((metric) => `
+    <div><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(metric.value)}</strong></div>
+  `).join("");
+
+  if (!rows.length) {
+    renderEmpty(els.reportResultList);
+    return;
+  }
+
+  els.reportResultList.innerHTML = rows.slice(0, 12).map((row, index) => `
+    <article class="report-result-row ${escapeHtml(getReportRowTone(row.status))}">
+      <div>
+        <strong>${escapeHtml(row.title)}</strong>
+        <span>${escapeHtml(row.subtitle || "")}</span>
+      </div>
+      <div>
+        <strong>${escapeHtml(row.value || "-")}</strong>
+        <span>${escapeHtml(row.meta || "")}</span>
+      </div>
+      <span class="report-row-actions">
+        <b>${escapeHtml(row.status || "")}</b>
+        <button class="ghost-button small-button" type="button" data-report-row-index="${index}">${escapeHtml(row.actionLabel || "Öppna")}</button>
+      </span>
+    </article>
+  `).join("");
+}
+
+function openReportRow(row) {
+  if (!row) return;
+  if (row.clientId && state.clients.some((client) => client.id === row.clientId)) selectedClientId = row.clientId;
+  if (row.projectId && state.projects.some((project) => project.id === row.projectId)) selectedProjectId = row.projectId;
+
+  if (row.targetView === "clients" && row.targetId) {
+    selectedClientId = row.targetId;
+    setView("clients");
+    renderClients();
+    showToast("Öppnade kundkortet från rapporten.");
+    return;
+  }
+
+  if (row.targetView === "invoice") {
+    setView("invoice");
+    renderInvoiceWorkbench();
+    if (row.targetId) openInvoiceDetail(row.targetId);
+    showToast("Öppnade fakturaunderlaget från rapporten.");
+    return;
+  }
+
+  if (row.targetView === "approvals") {
+    selectedReportId = "approvals";
+    setView("reports");
+    renderReportCatalog();
+    renderReportDetail();
+    if (els.approvalKindFilter && row.targetKind) els.approvalKindFilter.value = row.targetKind;
+    renderApprovalFlow();
+    els.approvalList?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast("Öppnade attestflödet från rapporten.");
+    return;
+  }
+
+  if (row.targetView === "time") {
+    setView("time");
+    if (row.targetKind && row.targetId && ["entry", "receipt", "travel"].includes(row.targetKind)) {
+      openEntityEditor(row.targetKind, row.targetId);
+    } else if (row.targetKind === "payroll") {
+      scrollToPageTarget("monthly-register");
+    }
+    showToast("Öppnade tidsunderlaget från rapporten.");
+  }
+}
+
+function handleReportAction(action) {
+  if (action === "export") {
+    exportCsv();
+    showToast("CSV-export skapades från aktuellt underlag.");
+    return;
+  }
+  if (action === "time" || action === "payroll") {
+    setView("time");
+    if (action === "payroll") scrollToPageTarget("monthly-register");
+    showToast("Öppnade tidsrapporteringen.");
+    return;
+  }
+  if (action === "invoice") {
+    setView("invoice");
+    scrollToPageTarget("invoice-history");
+    showToast("Öppnade fakturering.");
+    return;
+  }
+  if (action === "clients") {
+    setView("clients");
+    showToast("Öppnade kunder.");
+    return;
+  }
+  if (action === "approvals") {
+    selectedReportId = "approvals";
+    renderReportCatalog();
+    renderReportDetail();
+    els.approvalList?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast("Visar attestflödet.");
+  }
 }
 
 function isApprovalDone(status) {
@@ -3686,15 +5156,52 @@ function matchesApprovalStatusFilter(item, filter) {
   return true;
 }
 
+function setDynamicSelectOptions(select, options, allLabel) {
+  if (!select) return;
+  const selected = select.value || "all";
+  const normalized = [...new Map(options.filter(Boolean).map((option) => [option.value, option])).values()]
+    .sort((a, b) => a.label.localeCompare(b.label, "sv"));
+  select.innerHTML = [
+    `<option value="all">${escapeHtml(allLabel)}</option>`,
+    ...normalized.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
+  ].join("");
+  select.value = normalized.some((option) => option.value === selected) ? selected : "all";
+}
+
+function renderApprovalFilterOptions(items) {
+  setDynamicSelectOptions(
+    els.approvalOwnerFilter,
+    items.map((item) => ({ value: item.owner || "unassigned", label: item.owner || "Ingen ansvarig" })),
+    "Alla"
+  );
+  setDynamicSelectOptions(
+    els.approvalProjectFilter,
+    items.map((item) => {
+      const project = getProject(item.projectId);
+      return { value: item.projectId || "unassigned", label: project?.name || "Inget projekt" };
+    }),
+    "Alla projekt"
+  );
+}
+
 function getFilteredApprovalItems(items) {
   const query = (els.approvalSearch?.value || "").trim().toLowerCase();
+  const owner = els.approvalOwnerFilter?.value || "all";
+  const projectId = els.approvalProjectFilter?.value || "all";
   const kind = els.approvalKindFilter?.value || "all";
   const status = els.approvalStatusFilter?.value || "open";
+  const from = els.approvalFrom?.value || "";
+  const to = els.approvalTo?.value || "";
+  const actionableOnly = Boolean(els.approvalActionableOnly?.checked);
   return items.filter((item) => {
     const matchesKind = kind === "all" || item.kind === kind;
     const matchesStatus = matchesApprovalStatusFilter(item, status);
+    const matchesOwner = owner === "all" || (owner === "unassigned" ? !item.owner : item.owner === owner);
+    const matchesProject = projectId === "all" || (projectId === "unassigned" ? !item.projectId : item.projectId === projectId);
+    const matchesDate = isDateInRange(item.date || isoToday, from, to);
+    const matchesActionable = !actionableOnly || (item.actions || []).length > 0;
     const matchesQuery = !query || `${item.title} ${item.subtitle} ${item.value} ${item.note} ${item.haystack || ""}`.toLowerCase().includes(query);
-    return matchesKind && matchesStatus && matchesQuery;
+    return matchesKind && matchesStatus && matchesOwner && matchesProject && matchesDate && matchesActionable && matchesQuery;
   });
 }
 
@@ -3710,23 +5217,47 @@ function getSelectedApprovalTargets() {
     });
 }
 
+function getApprovalItem(kind, id, options = { includeApproved: true }) {
+  return getApprovalItems(options).find((item) => item.kind === kind && item.id === id) || null;
+}
+
 function renderApprovalFlow() {
   if (!els.approvalList) return;
   const allItems = getApprovalItems({ includeApproved: true });
+  renderApprovalFilterOptions(allItems);
   const visibleItems = getFilteredApprovalItems(allItems);
   const waiting = allItems.filter((item) => ["submitted", "sent", "created", "customerApproved"].includes(item.status));
   const blocked = allItems.filter((item) => isApprovalBlocked(item.status));
   const done = allItems.filter((item) => isApprovalDone(item.status));
   const drafts = allItems.filter((item) => ["draft", "rejected"].includes(item.status));
+  const visibleActionable = visibleItems.filter((item) => (item.actions || []).length > 0).length;
 
   if (els.approvalSummary) {
     els.approvalSummary.innerHTML = `
-      <div><span>Väntar attest</span><strong>${waiting.length}</strong></div>
-      <div><span>Utkast</span><strong>${drafts.length}</strong></div>
-      <div><span>Spärrade/förfallna</span><strong>${blocked.length}</strong></div>
-      <div><span>Klara</span><strong>${done.length}</strong></div>
-      <div><span>Visas nu</span><strong>${visibleItems.length}</strong></div>
+      <button type="button" data-approval-summary-filter="submitted"><span>Väntar attest</span><strong>${waiting.length}</strong></button>
+      <button type="button" data-approval-summary-filter="draft"><span>Utkast</span><strong>${drafts.length}</strong></button>
+      <button type="button" data-approval-summary-filter="blocked"><span>Spärrade/förfallna</span><strong>${blocked.length}</strong></button>
+      <button type="button" data-approval-summary-filter="approved"><span>Klara</span><strong>${done.length}</strong></button>
+      <button type="button" data-approval-summary-filter="all"><span>Visas nu</span><strong>${visibleItems.length}</strong></button>
+      <button type="button" data-approval-actionable-shortcut><span>Kan hanteras</span><strong>${visibleActionable}</strong></button>
     `;
+  }
+
+  if (els.approvalGroupSummary) {
+    const kindRows = ["entry", "receipt", "travel", "agreement", "esign", "invoice"].map((kind) => {
+      const rows = visibleItems.filter((item) => item.kind === kind);
+      const actionable = rows.filter((item) => (item.actions || []).length > 0).length;
+      return { kind, rows, actionable };
+    }).filter((row) => row.rows.length);
+    els.approvalGroupSummary.innerHTML = kindRows.length
+      ? kindRows.map((row) => `
+        <button class="approval-group-card" type="button" data-approval-kind-shortcut="${row.kind}">
+          <span>${escapeHtml(getApprovalKindLabel(row.kind))}</span>
+          <strong>${row.rows.length}</strong>
+          <small>${row.actionable} kan hanteras</small>
+        </button>
+      `).join("")
+      : "";
   }
 
   if (els.approvalSelectAll) {
@@ -3751,7 +5282,12 @@ function renderApprovalFlow() {
             <span class="badge ${getWorkflowBadgeClass(item.kind, item.status)}">${getWorkflowStatusLabel(item.kind, item.status)}</span>
           </div>
           <span>${escapeHtml(item.subtitle)} · ${item.date}</span>
-          <small class="approval-meta">${escapeHtml(item.owner || "Ingen ansvarig")} · ${escapeHtml(getApprovalKindLabel(item.kind))}</small>
+          <small class="approval-meta">
+            <span>${escapeHtml(item.owner || "Ingen ansvarig")}</span>
+            <span>${escapeHtml(getApprovalKindLabel(item.kind))}</span>
+            <span>${escapeHtml(getClient(item.clientId)?.name || "Ingen kund")}</span>
+            <span>${escapeHtml(getProject(item.projectId)?.name || "Inget projekt")}</span>
+          </small>
           ${item.note ? `<small class="review-note">${escapeHtml(item.note)}</small>` : ""}
         </div>
         <div class="approval-actions">
@@ -3778,10 +5314,69 @@ function getApprovalKindLabel(kind) {
   }[kind] || kind;
 }
 
+function getApprovalEditAttribute(kind, id) {
+  return {
+    entry: `data-edit-entry="${id}"`,
+    receipt: `data-edit-receipt="${id}"`,
+    travel: `data-edit-travel="${id}"`
+  }[kind] || "";
+}
+
+function openBasisApprovalDetail(kind, id) {
+  const item = getApprovalItem(kind, id);
+  const target = getApprovalTarget(kind, id);
+  if (!item || !target) return false;
+  const client = getClient(item.clientId);
+  const project = getProject(item.projectId);
+  const actions = item.actions || [];
+  const valueLabel = kind === "entry" ? "Tid" : kind === "receipt" ? "Belopp" : "Antal";
+  const description = kind === "entry"
+    ? target.description || target.workOrder || "Ingen beskrivning"
+    : kind === "receipt"
+      ? `${target.supplier || "Leverantör saknas"} · moms ${formatSEK(Number(target.vat || 0))}`
+      : `${target.from || "-"} till ${target.to || "-"}`;
+
+  setDrawerContent({
+    eyebrow: "Attest",
+    title: item.title,
+    body: `
+      <div class="drawer-list">
+        <article class="drawer-list-item">
+          <div>
+            <strong>${escapeHtml(item.subtitle)}</strong>
+            <span>${escapeHtml(description)}</span>
+          </div>
+          <span class="badge ${getWorkflowBadgeClass(kind, item.status)}">${escapeHtml(getWorkflowStatusLabel(kind, item.status))}</span>
+        </article>
+        <article class="drawer-list-item">
+          <strong>Koppling</strong>
+          <span>${escapeHtml(client?.name || "Ingen kund")} · ${escapeHtml(project?.name || "Inget projekt")} · ${escapeHtml(item.owner || "Ingen ansvarig")}</span>
+        </article>
+        <article class="drawer-list-item">
+          <strong>${escapeHtml(valueLabel)}</strong>
+          <span>${escapeHtml(item.value)} · datum ${escapeHtml(item.date || "-")}</span>
+        </article>
+        ${item.note ? `
+          <article class="drawer-list-item">
+            <strong>Kommentar</strong>
+            <span>${escapeHtml(item.note)}</span>
+          </article>
+        ` : ""}
+      </div>
+      <div class="drawer-actions">
+        <button class="ghost-button" type="button" ${getApprovalEditAttribute(kind, id)}>Redigera underlag</button>
+        ${actions.map((action) => `
+          <button class="${action.style === "primary" ? "primary-button" : "ghost-button"}" type="button" data-approval-action="${action.action}" data-approval-kind="${kind}" data-approval-id="${id}">${escapeHtml(action.label)}</button>
+        `).join("")}
+      </div>
+    `
+  });
+  return true;
+}
+
 function openApprovalItem(kind, id) {
   if (kind === "entry" || kind === "receipt" || kind === "travel") {
-    openEntityEditor(kind, id);
-    return true;
+    return openBasisApprovalDetail(kind, id);
   }
   if (kind === "agreement") {
     openAgreementDetail(id);
@@ -3805,9 +5400,23 @@ async function runApprovalBulkAction(action) {
     return;
   }
 
+  const options = { silent: true };
+  if (action === "reject") {
+    const note = window.prompt("Kommentar till de markerade posterna:", "Komplettera underlaget.");
+    if (note === null) return;
+    options.note = note.trim() || "Komplettera underlaget.";
+    const creditTargets = selected.filter((target) => {
+      if (target.kind !== "invoice") return false;
+      const invoice = (state.invoices || []).find((item) => item.id === target.id);
+      return invoice && getEffectiveInvoiceStatus(invoice) !== "changeRequested";
+    });
+    if (creditTargets.length && !window.confirm(`Vill du kreditera ${creditTargets.length} markerade fakturor?`)) return;
+    options.confirmedCredit = true;
+  }
+
   let changed = 0;
   for (const target of selected) {
-    if (await handleApprovalAction(action, target.kind, target.id)) changed += 1;
+    if (await handleApprovalAction(action, target.kind, target.id, options)) changed += 1;
   }
 
   if (!changed) {
@@ -3819,6 +5428,7 @@ async function runApprovalBulkAction(action) {
 
 function renderReports() {
   renderReportCatalog();
+  renderReportDetail();
   const visibleEntriesForReports = state.entries.filter(isEntryVisible);
   const totalHours = sumHours(visibleEntriesForReports);
   const billableHours = sumHours(visibleEntriesForReports.filter((entry) => entry.billable));
@@ -3873,13 +5483,28 @@ function renderReports() {
   const payrollEntries = state.entries.filter((entry) => isEntryVisible(entry) && entry.payroll && (isInvoiceReady(entry.status) || entry.status === "invoiced"));
   const payrollReceipts = state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId)) && receipt.payroll && (isInvoiceReady(receipt.status) || receipt.status === "invoiced"));
   const payrollTravels = state.travels.filter((travel) => isClientVisible(getClient(travel.clientId)) && travel.payroll && (isInvoiceReady(travel.status) || travel.status === "invoiced"));
-  const payrollByEmployee = Object.entries(groupBy(payrollEntries, (entry) => entry.employee))
-    .map(([employee, entries]) => ({
-      employee,
-      hours: sumHours(entries),
-      absence: sumHours(entries.filter((entry) => entry.type === "absence"))
-    }))
-    .sort((a, b) => b.hours - a.hours);
+  const payrollEmployees = [...new Set([
+    ...payrollEntries.map((entry) => entry.employee || getCurrentUser().name),
+    ...payrollReceipts.map((receipt) => receipt.employee || getCurrentUser().name),
+    ...payrollTravels.map((travel) => travel.employee || getCurrentUser().name)
+  ])].filter(Boolean);
+  const payrollByEmployee = payrollEmployees
+    .map((employee) => {
+      const entries = payrollEntries.filter((entry) => (entry.employee || getCurrentUser().name) === employee);
+      const receipts = payrollReceipts.filter((receipt) => (receipt.employee || getCurrentUser().name) === employee);
+      const travels = payrollTravels.filter((travel) => (travel.employee || getCurrentUser().name) === employee);
+      const receiptValue = receipts.reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0);
+      const travelValue = travels.reduce((sum, travel) => sum + getTravelValue(travel), 0);
+      return {
+        employee,
+        hours: sumHours(entries),
+        absence: sumHours(entries.filter((entry) => entry.type === "absence")),
+        receipts: receipts.length,
+        travels: travels.length,
+        amount: receiptValue + travelValue
+      };
+    })
+    .sort((a, b) => b.hours - a.hours || b.amount - a.amount);
 
   if (!payrollByEmployee.length) {
     els.payrollSummary.innerHTML = `
@@ -3905,9 +5530,9 @@ function renderReports() {
       <div class="invoice-item">
         <div>
           <strong>${escapeHtml(row.employee)}</strong>
-          <span>${formatHours(row.absence)} frånvaro i underlaget</span>
+          <span>${formatHours(row.absence)} frånvaro · ${row.receipts} kvitton · ${row.travels} resor</span>
         </div>
-        <strong>${formatHours(row.hours)}</strong>
+        <strong>${formatHours(row.hours)} · ${formatSEK(row.amount)}</strong>
       </div>
     `).join("")}
       <div class="invoice-item">
@@ -4017,13 +5642,20 @@ function renderAdminOverview() {
 
   const matrixViews = [
     ["dashboard", "Start"],
+    ["tasks", "Uppgifter"],
     ["time", "Tid"],
     ["clients", "Kunder"],
+    ["sales", "Affärer"],
+    ["projects", "Projekt"],
     ["agreements", "Avtal"],
     ["esign", "Signering"],
     ["invoice", "Faktura"],
+    ["planning", "Planering"],
+    ["analysis", "Analys"],
     ["portal", "Portal"],
-    ["reports", "Admin"]
+    ["collaboration", "Samarbete"],
+    ["versions", "Versioner"],
+    ["reports", "Rapporter"]
   ];
 
   els.roleMatrix.innerHTML = `
@@ -4165,6 +5797,8 @@ function getInvoiceRows() {
     const travels = state.travels.filter((travel) => travel.clientId === project.clientId && travel.billable && travel.status !== "invoiced" && isDateInRange(travel.date, from, to));
     const approvedEntries = entries.filter((entry) => isInvoiceReady(entry.status));
     const draftEntries = entries.filter((entry) => !isInvoiceReady(entry.status));
+    const blockedReceipts = receipts.filter((receipt) => !isInvoiceReady(receipt.status));
+    const blockedTravels = travels.filter((travel) => !isInvoiceReady(travel.status));
     const hours = sumHours(approvedEntries);
     const draftHours = sumHours(draftEntries);
     const fixedPrice = Number(project.fixedPrice || 0);
@@ -4188,7 +5822,12 @@ function getInvoiceRows() {
       otherValue,
       total,
       status: project.invoiceStatus || "preliminary",
-      warning: draftEntries.length + receipts.filter((receipt) => !isInvoiceReady(receipt.status)).length + travels.filter((travel) => !isInvoiceReady(travel.status)).length
+      warning: draftEntries.length + blockedReceipts.length + blockedTravels.length,
+      blockedBreakdown: {
+        entries: draftEntries.length,
+        receipts: blockedReceipts.length,
+        travels: blockedTravels.length
+      }
     };
   }).filter((row) => row.total > 0 || row.draftHours > 0);
 
@@ -4199,7 +5838,7 @@ function getInvoiceRows() {
       return !search || haystack.includes(search);
     });
 
-  return groupInvoiceRows(filteredRows);
+  return groupInvoiceRows(filteredRows).filter((row) => matchesInvoiceReadinessFilter(row));
 }
 
 function groupInvoiceRows(rows) {
@@ -4222,7 +5861,8 @@ function groupInvoiceRows(rows) {
         supplierInvoices: 0,
         otherValue: 0,
         total: 0,
-        warning: 0
+        warning: 0,
+        blockedBreakdown: { entries: 0, receipts: 0, travels: 0 }
       };
     } else {
       acc[key].sourceProjectIds.push(row.id);
@@ -4237,6 +5877,9 @@ function groupInvoiceRows(rows) {
     acc[key].otherValue += row.otherValue;
     acc[key].total += row.total;
     acc[key].warning += row.warning;
+    acc[key].blockedBreakdown.entries += row.blockedBreakdown?.entries || 0;
+    acc[key].blockedBreakdown.receipts += row.blockedBreakdown?.receipts || 0;
+    acc[key].blockedBreakdown.travels += row.blockedBreakdown?.travels || 0;
     return acc;
   }, {}));
 
@@ -4248,13 +5891,28 @@ function getInvoiceRowIssues(row) {
   if (row.warning > 0) issues.push(`${row.warning} rad${row.warning === 1 ? "" : "er"} behöver attest`);
   if (!row.client?.billingEmail && !row.client?.email) issues.push("Faktura-e-post saknas");
   if (!row.client?.invoiceReference) issues.push("Referens saknas");
+  if (!row.client?.invoiceAddress) issues.push("Fakturaadress saknas");
   if (row.hours > 0 && !Number(row.client?.rate || 0)) issues.push("Timpris saknas");
   if (row.total <= 0) issues.push("Inget belopp");
   return issues;
 }
 
+function getInvoiceIssueChips(row) {
+  const chips = [];
+  const breakdown = row.blockedBreakdown || {};
+  if (breakdown.entries) chips.push(`${breakdown.entries} tidsrad${breakdown.entries === 1 ? "" : "er"}`);
+  if (breakdown.receipts) chips.push(`${breakdown.receipts} kvitto${breakdown.receipts === 1 ? "" : "n"}`);
+  if (breakdown.travels) chips.push(`${breakdown.travels} resa${breakdown.travels === 1 ? "" : "or"}`);
+  if (!row.client?.billingEmail && !row.client?.email) chips.push("E-post saknas");
+  if (!row.client?.invoiceReference) chips.push("Referens saknas");
+  if (!row.client?.invoiceAddress) chips.push("Adress saknas");
+  if (row.hours > 0 && !Number(row.client?.rate || 0)) chips.push("Timpris saknas");
+  if (row.total <= 0) chips.push("Inget belopp");
+  return chips;
+}
+
 function isInvoiceRowReady(row) {
-  const blockingIssues = getInvoiceRowIssues(row).filter((issue) => issue !== "Referens saknas");
+  const blockingIssues = getInvoiceRowIssues(row).filter((issue) => !["Referens saknas", "Fakturaadress saknas"].includes(issue));
   return row.total > 0 && blockingIssues.length === 0;
 }
 
@@ -4270,6 +5928,16 @@ function getInvoiceReadinessBadge(row) {
   if (isInvoiceRowReady(row)) return "approved";
   if (row.warning > 0) return "submitted";
   return "rejected";
+}
+
+function matchesInvoiceReadinessFilter(row, filter = els.invoiceReadinessFilter?.value || "all") {
+  if (filter === "all") return true;
+  const issues = getInvoiceRowIssues(row);
+  if (filter === "ready") return isInvoiceRowReady(row);
+  if (filter === "blocked") return row.warning > 0;
+  if (filter === "customer") return issues.some((issue) => issue.includes("saknas"));
+  if (filter === "empty") return row.total <= 0;
+  return true;
 }
 
 function getInvoiceWorkbenchTotals(rows) {
@@ -4382,7 +6050,9 @@ function getInvoiceBlockedItems(detail) {
       title: entry.task,
       subtitle: `${entry.date} · ${entry.employee} · ${formatHours(Number(entry.hours || 0))}`,
       value: formatSEK(Number(entry.hours || 0) * Number(detail.client?.rate || 0)),
-      status: entry.status || "draft"
+      status: entry.status || "draft",
+      category: "Tid",
+      meta: entry.reviewNote || "Behöver attest innan faktura"
     }));
   const blockedReceipts = detail.receipts
     .filter((receipt) => !isInvoiceReady(receipt.status))
@@ -4393,7 +6063,9 @@ function getInvoiceBlockedItems(detail) {
       title: `Kvitto · ${receipt.supplier}`,
       subtitle: `${receipt.date} · ${getProject(receipt.projectId)?.name || detail.project.name}`,
       value: formatSEK(Number(receipt.amount || 0)),
-      status: receipt.status || "draft"
+      status: receipt.status || "draft",
+      category: "Kvitto",
+      meta: receipt.reviewNote || "Behöver attest innan faktura"
     }));
   const blockedTravels = detail.travels
     .filter((travel) => !isInvoiceReady(travel.status))
@@ -4404,7 +6076,9 @@ function getInvoiceBlockedItems(detail) {
       title: travel.type === "allowance" ? "Traktamente" : "Milersättning",
       subtitle: `${travel.date} · ${travel.from || "-"} till ${travel.to || "-"}`,
       value: formatSEK(getTravelValue(travel)),
-      status: travel.status || "draft"
+      status: travel.status || "draft",
+      category: "Resa",
+      meta: travel.reviewNote || "Behöver attest innan faktura"
     }));
   return [...blockedEntries, ...blockedReceipts, ...blockedTravels];
 }
@@ -4417,7 +6091,10 @@ function getInvoiceRecordLines(invoice) {
     return {
       title: entry.task,
       subtitle: `${entry.date} · ${entry.employee} · ${formatHours(Number(entry.hours || 0))}`,
-      value: formatSEK(Number(entry.hours || 0) * Number(client?.rate || 0))
+      value: formatSEK(Number(entry.hours || 0) * Number(client?.rate || 0)),
+      category: "Tid",
+      status: entry.status || "invoiced",
+      meta: getClient(entry.clientId)?.name || getProject(entry.projectId)?.name || "Kundtid"
     };
   });
   const receiptRows = (invoice.receiptIds || []).map((id) => {
@@ -4426,7 +6103,10 @@ function getInvoiceRecordLines(invoice) {
     return {
       title: `Kvitto · ${receipt.supplier}`,
       subtitle: `${receipt.date} · moms ${formatSEK(Number(receipt.vat || 0))}`,
-      value: formatSEK(Number(receipt.amount || 0))
+      value: formatSEK(Number(receipt.amount || 0)),
+      category: "Kvitto",
+      status: receipt.status || "invoiced",
+      meta: getProject(receipt.projectId)?.name || "Utlägg"
     };
   });
   const travelRows = (invoice.travelIds || []).map((id) => {
@@ -4435,7 +6115,10 @@ function getInvoiceRecordLines(invoice) {
     return {
       title: travel.type === "allowance" ? "Traktamente" : "Milersättning",
       subtitle: `${travel.date} · ${travel.from || "-"} till ${travel.to || "-"}`,
-      value: formatSEK(getTravelValue(travel))
+      value: formatSEK(getTravelValue(travel)),
+      category: "Resa",
+      status: travel.status || "invoiced",
+      meta: getClient(travel.clientId)?.name || "Resa"
     };
   });
   return [...entryRows, ...receiptRows, ...travelRows].filter(Boolean);
@@ -4444,6 +6127,8 @@ function getInvoiceRecordLines(invoice) {
 function renderInvoiceReadyChecklist(detail, meta) {
   const checks = [
     { label: "Faktura-e-post", ok: Boolean(meta.billingEmail), note: meta.billingEmail || "Saknas" },
+    { label: "Referens", ok: Boolean(meta.invoiceReference), note: meta.invoiceReference || "Saknas" },
+    { label: "Fakturaadress", ok: Boolean(meta.invoiceAddress), note: meta.invoiceAddress || "Saknas" },
     { label: "Attesterade rader", ok: detail.total > 0, note: formatSEK(detail.total) },
     { label: "Bankgiro", ok: Boolean(meta.bankgiro), note: meta.bankgiro || "Saknas" },
     { label: `Moms ${meta.vatRate}%`, ok: meta.vatRate >= 0, note: formatSEK(meta.vat) }
@@ -4461,6 +6146,82 @@ function renderInvoiceReadyChecklist(detail, meta) {
   `;
 }
 
+function renderInvoiceFlowSteps(steps) {
+  return `
+    <div class="invoice-flow-steps">
+      ${steps.map((step) => `
+        <div class="${step.state || ""}">
+          <span>${escapeHtml(step.index || "")}</span>
+          <strong>${escapeHtml(step.title)}</strong>
+          <small>${escapeHtml(step.note || "")}</small>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function getInvoiceDraftFlowSteps(detail, meta, blockedItems) {
+  const customerReady = Boolean(meta.billingEmail);
+  const lineReady = detail.total > 0;
+  const attestReady = blockedItems.length === 0;
+  const createReady = customerReady && lineReady && attestReady && (!detail.hours || Number(detail.client?.rate || 0));
+  return [
+    {
+      index: "1",
+      title: "Kunddata",
+      note: customerReady ? "Faktura-e-post finns" : "Komplettera e-post innan utskick",
+      state: customerReady ? "done" : "active"
+    },
+    {
+      index: "2",
+      title: "Rader",
+      note: lineReady ? `${formatSEK(detail.total)} i underlag` : "Inga attesterade rader",
+      state: lineReady ? "done" : "active"
+    },
+    {
+      index: "3",
+      title: "Attest",
+      note: attestReady ? "Alla rader är klara" : `${blockedItems.length} rad${blockedItems.length === 1 ? "" : "er"} behöver attest`,
+      state: attestReady ? "done" : "active"
+    },
+    {
+      index: "4",
+      title: "Skapa faktura",
+      note: createReady ? "Redo att skapa underlag" : "Väntar på komplettering",
+      state: createReady ? "ready" : ""
+    }
+  ];
+}
+
+function getInvoiceRecordFlowSteps(invoice, status) {
+  return [
+    {
+      index: "1",
+      title: "Skapad",
+      note: invoice.createdAt || "-",
+      state: "done"
+    },
+    {
+      index: "2",
+      title: "Skickad",
+      note: invoice.sentAt || invoice.portalSharedAt || "Inte skickad",
+      state: invoice.sentAt || invoice.portalSharedAt ? "done" : "active"
+    },
+    {
+      index: "3",
+      title: "Kund",
+      note: status === "changeRequested" ? "Ändring begärd" : invoice.customerApprovedAt ? "Godkänd av kund" : "Väntar på svar",
+      state: status === "changeRequested" ? "blocked" : invoice.customerApprovedAt ? "done" : ""
+    },
+    {
+      index: "4",
+      title: "Betalning",
+      note: invoice.paidAt ? `Betald ${invoice.paidAt}` : invoice.dueDate ? `Förfaller ${invoice.dueDate}` : "Ej betald",
+      state: status === "paid" ? "ready" : status === "overdue" ? "blocked" : ""
+    }
+  ];
+}
+
 function renderInvoiceLineRows(lines, emptyText = "Inga rader") {
   if (!lines.length) {
     return `<div class="empty-state compact-empty"><span>${escapeHtml(emptyText)}</span></div>`;
@@ -4470,9 +6231,11 @@ function renderInvoiceLineRows(lines, emptyText = "Inga rader") {
       <button class="clickable-row" type="button" ${line.editKind ? `data-edit-${line.editKind}="${line.id}"` : ""}>
         <strong>${escapeHtml(line.title)}</strong>
         <span>${escapeHtml(line.subtitle)}</span>
+        ${line.meta ? `<small>${escapeHtml(line.meta)}</small>` : ""}
       </button>
       <div class="invoice-line-actions">
         <strong>${escapeHtml(line.value)}</strong>
+        ${line.category ? `<span class="invoice-line-chip">${escapeHtml(line.category)}</span>` : ""}
         ${line.status ? `<span class="badge ${getApprovalBadgeClass(line.status)}">${escapeHtml(getApprovalStatusLabel(line.status))}</span>` : ""}
         ${line.excludeKind ? `<button class="ghost-button small-button" type="button" data-invoice-line-exclude="${line.excludeKind}" data-invoice-line-id="${line.id}" data-invoice-project-id="${line.projectId}">Ta bort</button>` : ""}
         ${line.approveKind ? `<button class="ghost-button small-button" type="button" data-invoice-line-approve="${line.approveKind}" data-invoice-line-id="${line.id}" data-invoice-project-id="${line.projectId}">Attestera</button>` : ""}
@@ -4485,6 +6248,61 @@ function saveInvoiceDraft(projectId) {
   const project = getProject(projectId);
   if (!project) return false;
   project.invoiceStatus = "draft";
+  return true;
+}
+
+function updateInvoiceSettings(form) {
+  const project = getProject(form.dataset.invoiceSettingsForm);
+  if (!project) return false;
+  const data = new FormData(form);
+  project.fixedPrice = Math.max(0, normalizeNumber(data.get("fixedPrice"), 0));
+  project.invoicePaymentTerms = String(data.get("paymentTerms") || "").trim();
+  project.invoiceVatRate = String(data.get("vatRate") || "").trim();
+  project.invoiceText = String(data.get("invoiceText") || "").trim();
+  project.invoiceStatus = "draft";
+  saveState();
+  renderAll();
+  openInvoiceDetail(project.id);
+  showToast("Fakturainställningarna sparades som utkast.");
+  return true;
+}
+
+function updateStoredInvoiceSettings(form) {
+  const invoice = (state.invoices || []).find((item) => item.id === form.dataset.storedInvoiceSettingsForm);
+  if (!invoice) return false;
+  if (["paid", "credited", "reopened"].includes(invoice.status)) {
+    showToast("Stängda fakturor kan inte ändras. Kreditera eller återöppna underlaget istället.", "warning");
+    return false;
+  }
+  const data = new FormData(form);
+  const paymentTerms = Math.max(0, Number(data.get("paymentTerms") || invoice.paymentTerms || 0));
+  const vatRate = Math.max(0, normalizeNumber(data.get("vatRate"), invoice.vatRate || 0));
+  const netTotal = Number(invoice.total || 0);
+  const vat = Math.round(netTotal * (vatRate / 100));
+  const dueDate = String(data.get("dueDate") || "").trim() || addDaysToISO(invoice.createdAt || isoToday, paymentTerms);
+
+  invoice.billingEmail = String(data.get("billingEmail") || "").trim();
+  invoice.invoiceReference = String(data.get("invoiceReference") || "").trim();
+  invoice.invoiceAddress = String(data.get("invoiceAddress") || "").trim();
+  invoice.paymentTerms = paymentTerms;
+  invoice.vatRate = vatRate;
+  invoice.dueDate = dueDate;
+  invoice.bankgiro = String(data.get("bankgiro") || "").trim();
+  invoice.invoiceText = String(data.get("invoiceText") || "").trim();
+  invoice.vat = vat;
+  invoice.totalInclVat = netTotal + vat;
+  invoice.documentHtml = buildStoredInvoiceDocument(invoice);
+  addInvoiceEvent(invoice, "Fakturauppgifter uppdaterade", `Förfallodatum ${invoice.dueDate} · ${formatSEK(invoice.totalInclVat)}`);
+
+  const task = (state.portalTasks || []).find((item) => item.id === invoice.portalTaskId || item.invoiceId === invoice.id);
+  if (task && invoice.portalSharedAt) {
+    addPortalTaskComment(task, `Faktura ${invoice.number} uppdaterades av byrån.`);
+  }
+
+  saveState();
+  renderAll();
+  openInvoiceRecordDetail(invoice.id);
+  showToast("Fakturauppgifterna uppdaterades och dokumentet byggdes om.");
   return true;
 }
 
@@ -4517,6 +6335,28 @@ function approveInvoiceBlockedItems(projectId) {
   return getInvoiceBlockedItems(detail).reduce((count, item) => approveInvoiceLine(item.kind, item.id) ? count + 1 : count, 0);
 }
 
+function getInvoiceProjectIdsFromRows(rows) {
+  return [...new Set(rows.flatMap((row) => row.sourceProjectIds || [row.id]))]
+    .filter((projectId) => Boolean(getProject(projectId)));
+}
+
+function saveInvoiceDraftsFromRows(rows) {
+  return getInvoiceProjectIdsFromRows(rows).reduce((count, projectId) => saveInvoiceDraft(projectId) ? count + 1 : count, 0);
+}
+
+function approveInvoiceBlockedFromRows(rows) {
+  return getInvoiceProjectIdsFromRows(rows).reduce((count, projectId) => count + approveInvoiceBlockedItems(projectId), 0);
+}
+
+function createInvoicesFromRows(rows) {
+  const createdRecords = [];
+  getInvoiceProjectIdsFromRows(rows).forEach((projectId) => {
+    const record = createInvoiceFromProject(projectId);
+    if (record) createdRecords.push(record);
+  });
+  return createdRecords;
+}
+
 function openInvoiceDetail(projectId) {
   const detail = getInvoiceDetail(projectId);
   if (!detail) {
@@ -4525,6 +6365,10 @@ function openInvoiceDetail(projectId) {
   }
   const meta = getInvoiceMeta(detail);
   const blockedItems = getInvoiceBlockedItems(detail);
+  const canCreateInvoice = detail.total > 0
+    && blockedItems.length === 0
+    && Boolean(meta.billingEmail)
+    && (!detail.hours || Number(detail.client?.rate || 0));
   const approvedLines = [
     ...detail.approvedEntries.map((entry) => ({
       id: entry.id,
@@ -4533,7 +6377,9 @@ function openInvoiceDetail(projectId) {
       projectId: detail.project.id,
       title: entry.task,
       subtitle: `${entry.date} · ${entry.employee} · ${formatHours(Number(entry.hours || 0))}`,
-      value: formatSEK(Number(entry.hours || 0) * Number(detail.client?.rate || 0))
+      value: formatSEK(Number(entry.hours || 0) * Number(detail.client?.rate || 0)),
+      category: "Tid",
+      meta: entry.description || detail.client?.name || "Debiterbar tid"
     })),
     ...detail.approvedReceipts.map((receipt) => ({
       id: receipt.id,
@@ -4542,7 +6388,9 @@ function openInvoiceDetail(projectId) {
       projectId: detail.project.id,
       title: `Kvitto · ${receipt.supplier}`,
       subtitle: `${receipt.date} · moms ${formatSEK(Number(receipt.vat || 0))}`,
-      value: formatSEK(Number(receipt.amount || 0))
+      value: formatSEK(Number(receipt.amount || 0)),
+      category: "Kvitto",
+      meta: receipt.fileName || "Vidarefakturerat utlägg"
     })),
     ...detail.approvedTravels.map((travel) => ({
       id: travel.id,
@@ -4551,7 +6399,9 @@ function openInvoiceDetail(projectId) {
       projectId: detail.project.id,
       title: travel.type === "allowance" ? "Traktamente" : "Milersättning",
       subtitle: `${travel.date} · ${travel.from || "-"} till ${travel.to || "-"}`,
-      value: formatSEK(getTravelValue(travel))
+      value: formatSEK(getTravelValue(travel)),
+      category: "Resa",
+      meta: travel.purpose || "Resa och traktamente"
     }))
   ];
 
@@ -4568,6 +6418,7 @@ function openInvoiceDetail(projectId) {
           <span class="badge ${detail.project.invoiceStatus === "draft" ? "draft" : "approved"}">${detail.project.invoiceStatus === "draft" ? "Utkast" : "Preliminärt"}</span>
         </article>
       </div>
+      ${renderInvoiceFlowSteps(getInvoiceDraftFlowSteps(detail, meta, blockedItems))}
       ${renderInvoiceReadyChecklist(detail, meta)}
       ${detail.warnings.length ? `
         <div class="info-banner warning-banner">
@@ -4590,6 +6441,23 @@ function openInvoiceDetail(projectId) {
         <div><span>Referens</span><strong>${escapeHtml(meta.invoiceReference || "Ej angiven")}</strong></div>
         <div><span>Bankgiro</span><strong>${escapeHtml(meta.bankgiro || "Ej angivet")}</strong></div>
       </div>
+      <form class="invoice-settings-form" data-invoice-settings-form="${detail.project.id}">
+        <div>
+          <label>Fastpris
+            <input name="fixedPrice" type="number" min="0" step="100" value="${Number(detail.project.fixedPrice || 0)}">
+          </label>
+          <label>Betalvillkor
+            <input name="paymentTerms" type="number" min="0" step="1" value="${escapeHtml(String(detail.project.invoicePaymentTerms || meta.paymentTerms))}">
+          </label>
+          <label>Moms %
+            <input name="vatRate" type="number" min="0" step="1" value="${escapeHtml(String(detail.project.invoiceVatRate || meta.vatRate))}">
+          </label>
+        </div>
+        <label>Fakturatext
+          <textarea name="invoiceText" rows="3" placeholder="Ex. Avser löpande redovisning, rådgivning och avstämningar för vald period.">${escapeHtml(detail.project.invoiceText || "")}</textarea>
+        </label>
+        <button class="ghost-button small-button" type="submit">Spara fakturainställningar</button>
+      </form>
       <div class="invoice-detail-list">
         <h3>Klara fakturarader</h3>
         ${renderInvoiceLineRows(approvedLines, "Inga attesterade rader")}
@@ -4601,8 +6469,9 @@ function openInvoiceDetail(projectId) {
         <button class="ghost-button" type="button" data-invoice-draft="${detail.project.id}">Spara utkast</button>
         <button class="ghost-button" type="button" data-invoice-preview="${detail.project.id}">Förhandsgranska</button>
         <button class="ghost-button" type="button" data-invoice-download="${detail.project.id}">Ladda ner</button>
+        ${blockedItems.length ? `<button class="ghost-button" type="button" data-invoice-open-approval="${detail.project.id}">Öppna attestflöde</button>` : ""}
         ${blockedItems.length ? `<button class="ghost-button" type="button" data-invoice-approve-blocked="${detail.project.id}">Snabbattestera spärrade</button>` : ""}
-        <button class="primary-button" type="button" data-invoice-create="${detail.project.id}">Skapa fakturaunderlag</button>
+        <button class="primary-button" type="button" data-invoice-create="${detail.project.id}" ${canCreateInvoice ? "" : "disabled"}>Skapa fakturaunderlag</button>
       </div>
     `
   });
@@ -4611,8 +6480,9 @@ function openInvoiceDetail(projectId) {
 function getInvoiceMeta(detail, override = {}) {
   const settings = state.settings || defaultState.settings;
   const client = detail.client || {};
-  const paymentTermsCandidate = override.paymentTerms ?? client.paymentTerms;
-  const vatRateCandidate = override.vatRate ?? client.vatRate;
+  const project = detail.project || {};
+  const paymentTermsCandidate = override.paymentTerms ?? project.invoicePaymentTerms ?? client.paymentTerms;
+  const vatRateCandidate = override.vatRate ?? project.invoiceVatRate ?? client.vatRate;
   const paymentTermsValue = paymentTermsCandidate === "" || paymentTermsCandidate == null ? (settings.paymentTerms || 10) : paymentTermsCandidate;
   const vatRateValue = vatRateCandidate === "" || vatRateCandidate == null ? (settings.vatRate ?? 25) : vatRateCandidate;
   const paymentTerms = Math.max(0, Number(paymentTermsValue));
@@ -4635,7 +6505,8 @@ function getInvoiceMeta(detail, override = {}) {
     invoiceReference: override.invoiceReference || client.invoiceReference || "",
     invoiceAddress: override.invoiceAddress || client.invoiceAddress || "",
     bankgiro: override.bankgiro || settings.bankgiro || "",
-    invoiceFooter: override.invoiceFooter || settings.invoiceFooter || ""
+    invoiceFooter: override.invoiceFooter || settings.invoiceFooter || "",
+    invoiceText: override.invoiceText ?? project.invoiceText ?? ""
   };
 }
 
@@ -4689,6 +6560,7 @@ function buildInvoiceDocument(projectId, override = {}) {
     </section>
     <h2>${escapeHtml(detail.project.name)}</h2>
     <p>Period: ${escapeHtml(detail.from || "start")} till ${escapeHtml(detail.to || "idag")}</p>
+    ${meta.invoiceText ? `<p>${escapeHtml(meta.invoiceText)}</p>` : ""}
     <table>
       <thead><tr><th>Rad</th><th>Antal</th><th>Pris</th><th>Belopp</th></tr></thead>
       <tbody>
@@ -4702,6 +6574,109 @@ function buildInvoiceDocument(projectId, override = {}) {
     </section>
     <p>Betalas till bankgiro ${escapeHtml(meta.bankgiro || "ej angivet")}.</p>
     ${meta.invoiceFooter ? `<p>${escapeHtml(meta.invoiceFooter)}</p>` : ""}
+  </main>
+</body>
+</html>`;
+}
+
+function getStoredInvoiceDocumentRows(invoice) {
+  const client = getClient(invoice.clientId);
+  const rows = [];
+  (invoice.entryIds || []).forEach((id) => {
+    const entry = state.entries.find((item) => item.id === id);
+    if (!entry) return;
+    rows.push({
+      label: entry.task || "Tid",
+      description: `${entry.date || "-"} · ${entry.employee || "-"} · ${formatHours(Number(entry.hours || 0))}`,
+      amount: Number(entry.hours || 0) * Number(client?.rate || 0)
+    });
+  });
+  (invoice.receiptIds || []).forEach((id) => {
+    const receipt = state.receipts.find((item) => item.id === id);
+    if (!receipt) return;
+    rows.push({
+      label: `Kvitto · ${receipt.supplier || "Utlägg"}`,
+      description: `${receipt.date || "-"} · moms ${formatSEK(Number(receipt.vat || 0))}`,
+      amount: Number(receipt.amount || 0)
+    });
+  });
+  (invoice.travelIds || []).forEach((id) => {
+    const travel = state.travels.find((item) => item.id === id);
+    if (!travel) return;
+    rows.push({
+      label: travel.type === "allowance" ? "Traktamente" : "Milersättning",
+      description: `${travel.date || "-"} · ${travel.from || "-"} till ${travel.to || "-"}`,
+      amount: getTravelValue(travel)
+    });
+  });
+  const represented = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const remainder = Number(invoice.total || 0) - represented;
+  if (remainder > 0.5) {
+    rows.push({
+      label: "Fastpris / övrigt",
+      description: getProject(invoice.projectId)?.name || "Fakturaunderlag",
+      amount: remainder
+    });
+  }
+  return rows;
+}
+
+function buildStoredInvoiceDocument(invoice) {
+  const client = getClient(invoice.clientId);
+  const project = getProject(invoice.projectId);
+  const settings = state.settings || defaultState.settings;
+  const rows = getStoredInvoiceDocumentRows(invoice);
+  return `<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <title>Faktura ${escapeHtml(invoice.number)} | ${escapeHtml(client?.name || "Kund")}</title>
+  <style>
+    body { margin: 0; background: #f4f3ef; color: #1f2528; font-family: Arial, sans-serif; }
+    .invoice { max-width: 860px; margin: 32px auto; padding: 48px; background: #fff; box-shadow: 0 18px 50px rgba(0,0,0,.12); }
+    .top { display: flex; justify-content: space-between; gap: 28px; margin-bottom: 34px; }
+    h1 { margin: 0; font-size: 34px; }
+    h2 { margin: 26px 0 10px; font-size: 18px; }
+    p { line-height: 1.5; }
+    .brand { color: #5c238d; font-weight: 800; }
+    .box { border: 1px solid #ddd; border-radius: 6px; padding: 14px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 18px; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid #ddd; text-align: left; }
+    th:last-child, td:last-child { text-align: right; }
+    .totals { width: min(340px, 100%); margin-left: auto; margin-top: 20px; }
+    .totals div { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #ddd; }
+    .total { font-size: 20px; font-weight: 800; }
+    @media print { body { background: #fff; } .invoice { margin: 0; box-shadow: none; max-width: none; } }
+  </style>
+</head>
+<body>
+  <main class="invoice">
+    <section class="top">
+      <div>
+        <p class="brand">${escapeHtml(settings.companyName || "Novadex Tid & Löner")}</p>
+        <h1>Faktura</h1>
+        <p>Fakturanummer ${escapeHtml(invoice.number)}<br>Fakturadatum ${invoice.createdAt || "-"}<br>Förfallodatum ${invoice.dueDate || "-"}<br>Betalvillkor ${invoice.paymentTerms || 0} dagar</p>
+      </div>
+      <div class="box">
+        <strong>${escapeHtml(client?.name || "Okänd kund")}</strong>
+        <p>Org.nr: ${escapeHtml(client?.org || "Ej angivet")}<br>Faktura e-post: ${escapeHtml(invoice.billingEmail || client?.billingEmail || client?.email || "Ej angiven")}${invoice.invoiceReference ? `<br>Referens: ${escapeHtml(invoice.invoiceReference)}` : ""}${invoice.invoiceAddress ? `<br>Adress: ${escapeHtml(invoice.invoiceAddress)}` : ""}</p>
+      </div>
+    </section>
+    <h2>${escapeHtml(project?.name || "Fakturaunderlag")}</h2>
+    ${invoice.invoiceText ? `<p>${escapeHtml(invoice.invoiceText)}</p>` : ""}
+    <table>
+      <thead><tr><th>Rad</th><th>Beskrivning</th><th>Belopp</th></tr></thead>
+      <tbody>
+        ${rows.map((row) => `<tr><td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.description)}</td><td>${formatSEK(row.amount)}</td></tr>`).join("")}
+      </tbody>
+    </table>
+    <section class="totals">
+      <div><span>Netto</span><strong>${formatSEK(Number(invoice.total || 0))}</strong></div>
+      <div><span>Moms ${invoice.vatRate || 0}%</span><strong>${formatSEK(Number(invoice.vat || 0))}</strong></div>
+      <div class="total"><span>Att betala</span><strong>${formatSEK(Number(invoice.totalInclVat || invoice.total || 0))}</strong></div>
+    </section>
+    <p>Betalas till bankgiro ${escapeHtml(invoice.bankgiro || settings.bankgiro || "ej angivet")}.</p>
+    ${settings.invoiceFooter ? `<p>${escapeHtml(settings.invoiceFooter)}</p>` : ""}
   </main>
 </body>
 </html>`;
@@ -4768,6 +6743,7 @@ function createInvoiceRecord(project) {
     dueDate: meta.dueDate,
     paymentTerms: meta.paymentTerms,
     vatRate: meta.vatRate,
+    invoiceText: meta.invoiceText,
     total: meta.netTotal,
     vat: meta.vat,
     totalInclVat: meta.totalInclVat,
@@ -4776,11 +6752,24 @@ function createInvoiceRecord(project) {
     invoiceAddress: meta.invoiceAddress,
     bankgiro: meta.bankgiro,
     status: existing?.status || "created",
+    sentAt: existing?.sentAt || "",
+    portalSharedAt: existing?.portalSharedAt || "",
+    portalTaskId: existing?.portalTaskId || "",
+    customerApprovedAt: existing?.customerApprovedAt || "",
+    customerApprovedBy: existing?.customerApprovedBy || "",
+    changeRequestedAt: existing?.changeRequestedAt || "",
+    changeRequestedBy: existing?.changeRequestedBy || "",
+    changeRequestMessage: existing?.changeRequestMessage || "",
+    paidAt: existing?.paidAt || "",
+    creditedAt: existing?.creditedAt || "",
+    reopenedAt: existing?.reopenedAt || "",
+    events: existing?.events || [],
     entryIds: detail.approvedEntries.map((entry) => entry.id),
     receiptIds: detail.approvedReceipts.map((receipt) => receipt.id),
     travelIds: detail.approvedTravels.map((travel) => travel.id),
     documentHtml: buildInvoiceDocument(project.id, meta)
   };
+  addInvoiceEvent(record, existing ? "Faktura uppdaterad" : "Faktura skapad", `${project.name} · ${formatSEK(record.totalInclVat || record.total || 0)}`);
   state.invoices = existing
     ? state.invoices.map((invoice) => invoice.id === existing.id ? record : invoice)
     : [record, ...(state.invoices || [])];
@@ -4814,6 +6803,7 @@ function reopenInvoice(invoiceId) {
   if (project) project.invoiceStatus = "draft";
   invoice.status = "reopened";
   invoice.reopenedAt = isoToday;
+  addInvoiceEvent(invoice, "Faktura återöppnad", "Kopplade rader släpptes tillbaka till fakturering.");
   return true;
 }
 
@@ -4830,7 +6820,46 @@ function setInvoiceStatus(invoiceId, status) {
   if (status === "credited") invoice.creditedAt = isoToday;
   if (status === "customerApproved") invoice.customerApprovedAt = isoToday;
   if (status === "changeRequested") invoice.changeRequestedAt = isoToday;
+  if (status === "changeRequested" && !invoice.changeRequestMessage) {
+    invoice.changeRequestMessage = "Ändring begärd av byrån.";
+  }
+  if (status === "changeRequested" && !(state.portalTasks || []).some((task) => task.id === invoice.portalTaskId || task.invoiceId === invoice.id)) {
+    const task = createInvoicePortalTask(invoice, invoice.changeRequestMessage);
+    invoice.portalTaskId = task.id;
+  }
+  addInvoiceEvent(invoice, `Status: ${getInvoiceStatusLabel(status)}`, getInvoiceNextAction(invoice).detail);
+  syncInvoicePortalTask(invoice, status);
   return true;
+}
+
+function syncInvoicePortalTask(invoice, status = getEffectiveInvoiceStatus(invoice)) {
+  const task = (state.portalTasks || []).find((item) => item.id === invoice.portalTaskId || item.invoiceId === invoice.id);
+  if (!task) return;
+
+  if (status === "sent" || status === "overdue") {
+    task.status = task.status === "done" ? "open" : task.status;
+    task.waitingOn = "customer";
+    addPortalTaskComment(task, `Faktura ${invoice.number} väntar på kundens granskning.`);
+  }
+
+  if (status === "customerApproved") {
+    task.status = "submitted";
+    task.waitingOn = "office";
+    addPortalTaskComment(task, `Kunden godkände faktura ${invoice.number}.`);
+  }
+
+  if (status === "changeRequested") {
+    task.status = "open";
+    task.waitingOn = "office";
+    addPortalTaskComment(task, `Ändring begärd på faktura ${invoice.number}: ${invoice.changeRequestMessage || "Se fakturakortet."}`);
+  }
+
+  if (status === "paid") {
+    task.status = "done";
+    task.completedAt = isoToday;
+    task.waitingOn = "";
+    addPortalTaskComment(task, `Faktura ${invoice.number} markerades som betald.`);
+  }
 }
 
 function excludeInvoiceLine(kind, id, projectId) {
@@ -4876,6 +6905,8 @@ function sendInvoiceEmail(invoiceId) {
   window.location.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
   invoice.status = "sent";
   invoice.sentAt = isoToday;
+  addInvoiceEvent(invoice, "E-postutkast öppnat", `Mottagare: ${email}`);
+  syncInvoicePortalTask(invoice, "sent");
   return true;
 }
 
@@ -4891,6 +6922,8 @@ function openInvoiceRecordDetail(invoiceId) {
   const timeline = getInvoiceTimeline(invoice);
   const invoiceLines = getInvoiceRecordLines(invoice);
   const isClosed = ["paid", "credited", "reopened"].includes(invoice.status);
+  const canEditInvoice = !isClosed;
+  const portalTasks = (state.portalTasks || []).filter((task) => task.invoiceId === invoice.id || task.id === invoice.portalTaskId);
 
   setDrawerContent({
     eyebrow: "Faktura",
@@ -4919,6 +6952,64 @@ function openInvoiceRecordDetail(invoiceId) {
           </article>
         ` : ""}
       </div>
+        ${invoice.invoiceText ? `
+      <div class="drawer-list">
+          <article class="drawer-list-item">
+            <strong>Fakturatext</strong>
+            <span>${escapeHtml(invoice.invoiceText)}</span>
+          </article>
+      </div>
+        ` : ""}
+      ${(invoice.portalSharedAt || portalTasks.length || invoice.changeRequestMessage) ? `
+      <div class="drawer-list">
+          <article class="drawer-list-item">
+            <strong>Kundportal</strong>
+            <span>${invoice.portalSharedAt ? `Delad ${escapeHtml(invoice.portalSharedAt)}` : "Inte delad ännu"}${portalTasks.length ? ` · ${portalTasks.length} ärende${portalTasks.length === 1 ? "" : "n"}` : ""}</span>
+          </article>
+          ${invoice.changeRequestMessage ? `
+          <article class="drawer-list-item">
+            <strong>Ändringsfråga</strong>
+            <span>${escapeHtml(invoice.changeRequestMessage)}</span>
+          </article>
+          ` : ""}
+      </div>
+        ` : ""}
+      <form class="invoice-settings-form stored-invoice-settings-form" data-stored-invoice-settings-form="${invoice.id}">
+        <div class="form-intro">
+          <strong>Fakturauppgifter före utskick</strong>
+          <span>Ändringar bygger om fakturadokumentet och sparas i händelseloggen.</span>
+        </div>
+        <div>
+          <label>Faktura-e-post
+            <input name="billingEmail" type="email" value="${escapeHtml(invoice.billingEmail || client?.billingEmail || client?.email || "")}" ${canEditInvoice ? "" : "disabled"}>
+          </label>
+          <label>Referens
+            <input name="invoiceReference" type="text" value="${escapeHtml(invoice.invoiceReference || "")}" ${canEditInvoice ? "" : "disabled"}>
+          </label>
+          <label>Bankgiro
+            <input name="bankgiro" type="text" value="${escapeHtml(invoice.bankgiro || state.settings.bankgiro || "")}" ${canEditInvoice ? "" : "disabled"}>
+          </label>
+        </div>
+        <div>
+          <label>Betalvillkor
+            <input name="paymentTerms" type="number" min="0" step="1" value="${Number(invoice.paymentTerms || 0)}" ${canEditInvoice ? "" : "disabled"}>
+          </label>
+          <label>Förfallodatum
+            <input name="dueDate" type="date" value="${escapeHtml(invoice.dueDate || "")}" ${canEditInvoice ? "" : "disabled"}>
+          </label>
+          <label>Moms %
+            <input name="vatRate" type="number" min="0" step="0.1" value="${Number(invoice.vatRate || 0)}" ${canEditInvoice ? "" : "disabled"}>
+          </label>
+        </div>
+        <label>Fakturaadress
+          <input name="invoiceAddress" type="text" value="${escapeHtml(invoice.invoiceAddress || "")}" ${canEditInvoice ? "" : "disabled"}>
+        </label>
+        <label>Fakturatext
+          <textarea name="invoiceText" rows="3" ${canEditInvoice ? "" : "disabled"}>${escapeHtml(invoice.invoiceText || "")}</textarea>
+        </label>
+        <button class="primary-button" type="submit" ${canEditInvoice ? "" : "disabled"}>Spara fakturauppgifter</button>
+      </form>
+      ${renderInvoiceFlowSteps(getInvoiceRecordFlowSteps(invoice, status))}
       <div class="invoice-timeline">
         ${timeline.map((item) => `
           <div class="${item.active ? "active" : ""}">
@@ -4928,6 +7019,19 @@ function openInvoiceRecordDetail(invoiceId) {
           </div>
         `).join("")}
       </div>
+      ${(invoice.events || []).length ? `
+      <div class="drawer-list invoice-event-log">
+        ${(invoice.events || []).slice().reverse().map((event) => `
+          <article class="drawer-list-item">
+            <div>
+              <strong>${escapeHtml(event.label || "Händelse")}</strong>
+              <span>${escapeHtml(event.actor || "System")} · ${escapeHtml(event.date || "-")}</span>
+            </div>
+            <span>${escapeHtml(event.note || "")}</span>
+          </article>
+        `).join("")}
+      </div>
+      ` : ""}
       <div class="invoice-detail-list">
         <h3>Ingår i fakturan</h3>
         ${renderInvoiceLineRows(invoiceLines, "Inga kopplade rader")}
@@ -4936,10 +7040,13 @@ function openInvoiceRecordDetail(invoiceId) {
         <button class="ghost-button" type="button" data-open-document="invoice" data-document-id="${invoice.id}">Öppna faktura</button>
         <button class="ghost-button" type="button" data-invoice-stored-download="${invoice.id}">Ladda ner</button>
         <button class="ghost-button" type="button" data-invoice-email="${invoice.id}" ${isClosed ? "disabled" : ""}>Skicka e-post</button>
+        <button class="ghost-button" type="button" data-invoice-share-portal="${invoice.id}" ${isClosed ? "disabled" : ""}>Skicka till kundportal</button>
         <button class="ghost-button" type="button" data-invoice-status="sent" data-invoice-id="${invoice.id}" ${isClosed ? "disabled" : ""}>Markera skickad</button>
+        <button class="ghost-button" type="button" data-invoice-status="customerApproved" data-invoice-id="${invoice.id}" ${isClosed ? "disabled" : ""}>Kund godkände</button>
+        <button class="ghost-button" type="button" data-invoice-status="changeRequested" data-invoice-id="${invoice.id}" ${isClosed ? "disabled" : ""}>Begär ändring</button>
         <button class="ghost-button" type="button" data-invoice-status="paid" data-invoice-id="${invoice.id}" ${["credited", "reopened"].includes(invoice.status) ? "disabled" : ""}>Markera betald</button>
         <button class="ghost-button" type="button" data-invoice-status="credited" data-invoice-id="${invoice.id}" ${["credited", "reopened"].includes(invoice.status) ? "disabled" : ""}>Kreditera</button>
-        <button class="ghost-button" type="button" data-invoice-reopen="${invoice.id}" ${isClosed ? "disabled" : ""}>Återöppna underlag</button>
+        <button class="ghost-button" type="button" data-invoice-reopen="${invoice.id}" ${isClosed ? "disabled" : ""}>${status === "changeRequested" ? "Återöppna för ändring" : "Återöppna underlag"}</button>
       </div>
     `
   });
@@ -4975,17 +7082,35 @@ function openStoredDocument(kind, id) {
   }
 }
 
+function getMonthKey(dateString = isoToday, offset = 0) {
+  const date = new Date(`${dateString || isoToday}T12:00:00`);
+  date.setMonth(date.getMonth() + offset);
+  return date.toISOString().slice(0, 7);
+}
+
+function getMonthStart(dateString = isoToday, offset = 0) {
+  const date = new Date(`${dateString || isoToday}T12:00:00`);
+  date.setMonth(date.getMonth() + offset, 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function sumInvoicesForMonth(invoices, monthKey) {
+  return invoices
+    .filter((invoice) => String(invoice.createdAt || "").slice(0, 7) === monthKey)
+    .reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0);
+}
+
 function renderInvoiceWorkbench() {
   const rowsAll = getInvoiceRows();
   const activeTab = document.querySelector("[data-invoice-tab].active")?.dataset.invoiceTab || "preliminary";
   const activeInvoices = (state.invoices || []).filter((invoice) => !["credited", "reopened"].includes(invoice.status));
-  const currentMonthCreated = activeInvoices
-    .filter((invoice) => invoice.createdAt?.slice(0, 7) === isoToday.slice(0, 7))
-    .reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0);
+  const previousMonthCreated = sumInvoicesForMonth(activeInvoices, getMonthKey(isoToday, -1));
+  const currentMonthCreated = sumInvoicesForMonth(activeInvoices, getMonthKey(isoToday, 0));
   const openTotal = rowsAll.reduce((total, row) => total + row.total, 0);
-  els.invoicePrevMonth.textContent = formatSEK(0);
+  els.invoicePrevMonth.textContent = formatSEK(previousMonthCreated);
   els.invoiceCurrentMonth.textContent = formatSEK(currentMonthCreated);
   els.invoiceTotalOpen.textContent = formatSEK(openTotal);
+  renderInvoiceCommandStrip();
   renderInvoiceHistory();
 
   if (!rowsAll.length) {
@@ -4997,8 +7122,12 @@ function renderInvoiceWorkbench() {
   }
 
   els.invoiceTable.innerHTML = rowsAll.map((row) => {
-    const canRunInvoiceAction = state.projects.some((project) => project.id === row.id);
+    const actionProjectId = state.projects.some((project) => project.id === row.id)
+      ? row.id
+      : row.sourceProjectIds?.[0];
+    const canRunInvoiceAction = Boolean(actionProjectId);
     const rowIssues = getInvoiceRowIssues(row);
+    const issueChips = getInvoiceIssueChips(row);
     const isReady = isInvoiceRowReady(row);
     const invoiceEmail = row.client?.billingEmail || row.client?.email || "";
     return `
@@ -5006,10 +7135,20 @@ function renderInvoiceWorkbench() {
       <td>
         <a href="#" class="table-link" data-invoice-open="${row.id}">${row.number} - ${escapeHtml(row.project.name)}</a>
         <span class="table-subtext">${rowIssues.length ? escapeHtml(rowIssues.slice(0, 2).join(" · ")) : "Redo att fakturera"}</span>
+        <div class="invoice-issue-chips">
+          ${issueChips.length
+            ? issueChips.map((issue) => `<span>${escapeHtml(issue)}</span>`).join("")
+            : `<span class="ready">Klar för faktura</span>`
+          }
+        </div>
       </td>
       <td>
         <strong>${escapeHtml(row.client?.name || "Okänd kund")}</strong>
         <span class="table-subtext">${invoiceEmail ? escapeHtml(invoiceEmail) : "Faktura-e-post saknas"}</span>
+        <div class="invoice-row-quick-actions">
+          ${row.warning > 0 && actionProjectId ? `<button type="button" data-invoice-row-approval="${actionProjectId}">Öppna attest</button>` : ""}
+          ${row.client?.id && rowIssues.some((issue) => issue.includes("saknas")) ? `<button type="button" data-edit-client="${row.client.id}">Kunddata</button>` : ""}
+        </div>
       </td>
       <td>${formatSEK(row.fixedPrice)}</td>
       <td>
@@ -5027,17 +7166,17 @@ function renderInvoiceWorkbench() {
       </td>
       <td>
         <div class="row-actions">
-          <button class="mini-button" type="button" title="Förhandsgranska" aria-label="Förhandsgranska" data-invoice-preview="${row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
-            <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h8M8 17h4"></path></svg>
+          <button class="mini-button" type="button" title="Förhandsgranska" aria-label="Förhandsgranska" data-invoice-preview="${actionProjectId || row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
+            ${icon("file-text")}
           </button>
-          <button class="mini-button" type="button" title="Ladda ner faktura" aria-label="Ladda ner faktura" data-invoice-download="${row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
-            <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"></path></svg>
+          <button class="mini-button" type="button" title="Ladda ner faktura" aria-label="Ladda ner faktura" data-invoice-download="${actionProjectId || row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
+            ${icon("download")}
           </button>
-          <button class="mini-button" type="button" title="Spara som utkast" aria-label="Spara som utkast" data-invoice-draft="${row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
-            <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"></path></svg>
+          <button class="mini-button" type="button" title="Spara som utkast" aria-label="Spara som utkast" data-invoice-draft="${actionProjectId || row.id}" ${canRunInvoiceAction ? "" : "disabled"}>
+            ${icon("file-pencil")}
           </button>
-          <button class="mini-button" type="button" title="${isReady ? "Skapa fakturaunderlag" : "Komplettera raden innan faktura skapas"}" aria-label="Skapa fakturaunderlag" data-invoice-create="${row.id}" ${canRunInvoiceAction && isReady ? "" : "disabled"}>
-            <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg>
+          <button class="mini-button" type="button" title="${isReady ? "Skapa fakturaunderlag" : "Komplettera raden innan faktura skapas"}" aria-label="Skapa fakturaunderlag" data-invoice-create="${actionProjectId || row.id}" ${canRunInvoiceAction && isReady ? "" : "disabled"}>
+            ${icon("check")}
           </button>
         </div>
       </td>
@@ -5047,13 +7186,105 @@ function renderInvoiceWorkbench() {
 
 }
 
+function getSortedInvoices() {
+  return [...(state.invoices || [])]
+    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "") || String(b.number).localeCompare(String(a.number)));
+}
+
+function renderInvoiceHistoryControls(invoices) {
+  if (!els.invoiceHistoryClient) return;
+  setDynamicSelectOptions(
+    els.invoiceHistoryClient,
+    invoices.map((invoice) => {
+      const client = getClient(invoice.clientId);
+      return { value: invoice.clientId || "unknown", label: client?.name || "Okänd kund" };
+    }),
+    "Alla kunder"
+  );
+}
+
+function getFilteredInvoiceHistoryRows(invoices = getSortedInvoices()) {
+  const query = (els.invoiceHistorySearch?.value || "").trim().toLowerCase();
+  const statusFilter = els.invoiceHistoryStatus?.value || "all";
+  const clientFilter = els.invoiceHistoryClient?.value || "all";
+  return invoices.filter((invoice) => {
+    const client = getClient(invoice.clientId);
+    const project = getProject(invoice.projectId);
+    const status = getEffectiveInvoiceStatus(invoice);
+    const matchesStatus = statusFilter === "all"
+      || (statusFilter === "open" ? !["paid", "credited", "reopened"].includes(status) : status === statusFilter);
+    const matchesClient = clientFilter === "all" || invoice.clientId === clientFilter || (clientFilter === "unknown" && !client);
+    const haystack = `${invoice.number} ${client?.name || ""} ${project?.name || ""} ${invoice.billingEmail || ""} ${invoice.invoiceReference || ""}`.toLowerCase();
+    return matchesStatus && matchesClient && (!query || haystack.includes(query));
+  });
+}
+
+function renderInvoiceHistorySummary(allInvoices, visibleInvoices) {
+  if (!els.invoiceHistorySummary) return;
+  const activeInvoices = allInvoices.filter((invoice) => !["credited", "reopened"].includes(getEffectiveInvoiceStatus(invoice)));
+  const unpaidInvoices = activeInvoices.filter((invoice) => !["paid"].includes(getEffectiveInvoiceStatus(invoice)));
+  const overdueInvoices = activeInvoices.filter((invoice) => getEffectiveInvoiceStatus(invoice) === "overdue");
+  const changeInvoices = activeInvoices.filter((invoice) => getEffectiveInvoiceStatus(invoice) === "changeRequested");
+  const approvedInvoices = activeInvoices.filter((invoice) => getEffectiveInvoiceStatus(invoice) === "customerApproved");
+  const paidInvoices = allInvoices.filter((invoice) => getEffectiveInvoiceStatus(invoice) === "paid");
+  const visibleTotal = visibleInvoices.reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0);
+  els.invoiceHistorySummary.innerHTML = `
+    <button type="button" data-invoice-history-status="open">
+      <span>Öppna</span>
+      <strong>${unpaidInvoices.length}</strong>
+      <small>${formatSEK(unpaidInvoices.reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0))}</small>
+    </button>
+    <button type="button" data-invoice-history-status="overdue">
+      <span>Förfallna</span>
+      <strong>${overdueInvoices.length}</strong>
+      <small>${formatSEK(overdueInvoices.reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0))}</small>
+    </button>
+    <button type="button" data-invoice-history-status="paid">
+      <span>Betalda</span>
+      <strong>${paidInvoices.length}</strong>
+      <small>${formatSEK(paidInvoices.reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0))}</small>
+    </button>
+    <button type="button" data-invoice-history-status="changeRequested">
+      <span>Ändringar</span>
+      <strong>${changeInvoices.length}</strong>
+      <small>${formatSEK(changeInvoices.reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0))}</small>
+    </button>
+    <button type="button" data-invoice-history-status="customerApproved">
+      <span>Godkända</span>
+      <strong>${approvedInvoices.length}</strong>
+      <small>${formatSEK(approvedInvoices.reduce((sum, invoice) => sum + Number(invoice.totalInclVat || invoice.total || 0), 0))}</small>
+    </button>
+    <button type="button" data-invoice-history-status="all">
+      <span>Visas nu</span>
+      <strong>${visibleInvoices.length}</strong>
+      <small>${formatSEK(visibleTotal)}</small>
+    </button>
+  `;
+}
+
 function renderInvoiceHistory() {
   if (!els.invoiceHistoryTable) return;
-  const invoices = [...(state.invoices || [])]
-    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "") || String(b.number).localeCompare(String(a.number)));
+  const allInvoices = getSortedInvoices();
+  renderInvoiceHistoryControls(allInvoices);
+  const invoices = getFilteredInvoiceHistoryRows(allInvoices);
+  renderInvoiceHistorySummary(allInvoices, invoices);
 
   if (!invoices.length) {
-    els.invoiceHistoryTable.innerHTML = `<tr><td colspan="8">${els.emptyTemplate.innerHTML}</td></tr>`;
+    const readyRows = getInvoiceRows().filter(isInvoiceRowReady);
+    els.invoiceHistoryTable.innerHTML = `
+      <tr>
+        <td colspan="8">
+          <div class="empty-state invoice-empty-state">
+            <svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5M9 14h8M9 18h5"></path></svg>
+            <span>${readyRows.length ? `${readyRows.length} klara underlag kan bli faktura.` : "Inga fakturor matchar filtret ännu."}</span>
+            <div class="row-actions">
+              ${readyRows.length ? `<button class="primary-button small-button" type="button" data-invoice-empty-action="create-ready">Skapa faktura</button>` : ""}
+              <button class="ghost-button small-button" type="button" data-invoice-empty-action="show-all">Visa alla</button>
+            </div>
+          </div>
+        </td>
+      </tr>
+    `;
     return;
   }
 
@@ -5062,6 +7293,7 @@ function renderInvoiceHistory() {
     const client = getClient(invoice.clientId);
     const status = getEffectiveInvoiceStatus(invoice);
     const isClosed = ["paid", "credited", "reopened"].includes(invoice.status);
+    const nextAction = getInvoiceNextAction(invoice);
     return `
       <tr>
         <td><a href="#" class="table-link" data-invoice-detail="${invoice.id}">${escapeHtml(invoice.number)}</a></td>
@@ -5069,33 +7301,42 @@ function renderInvoiceHistory() {
         <td>${escapeHtml(project?.name || "Okänt projekt")}</td>
         <td>${invoice.createdAt || "-"}</td>
         <td>${invoice.dueDate || "-"}</td>
-        <td><span class="badge ${getInvoiceStatusBadge(status)}">${getInvoiceStatusLabel(status)}</span></td>
+        <td>
+          <span class="badge ${getInvoiceStatusBadge(status)}">${getInvoiceStatusLabel(status)}</span>
+          <div class="invoice-next-action ${nextAction.tone}">
+            <strong>${escapeHtml(nextAction.label)}</strong>
+            <span>${escapeHtml(nextAction.detail)}</span>
+          </div>
+        </td>
         <td><strong>${formatSEK(Number(invoice.totalInclVat || invoice.total || 0))}</strong></td>
         <td>
           <div class="row-actions">
             <button class="mini-button" type="button" title="Fakturakort" aria-label="Fakturakort" data-invoice-detail="${invoice.id}">
-              <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h4"></path></svg>
+              ${icon("file-description")}
             </button>
             <button class="mini-button" type="button" title="Öppna faktura" aria-label="Öppna faktura" data-open-document="invoice" data-document-id="${invoice.id}">
-              <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h8M8 17h4"></path></svg>
+              ${icon("file-text")}
             </button>
             <button class="mini-button" type="button" title="Ladda ner faktura" aria-label="Ladda ner faktura" data-invoice-stored-download="${invoice.id}">
-              <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"></path></svg>
+              ${icon("download")}
             </button>
             <button class="mini-button" type="button" title="Skicka e-post" aria-label="Skicka e-post" data-invoice-email="${invoice.id}" ${isClosed ? "disabled" : ""}>
-              <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 7l8 6 8-6"></path></svg>
+              ${icon("mail")}
+            </button>
+            <button class="mini-button" type="button" title="Skicka till kundportal" aria-label="Skicka till kundportal" data-invoice-share-portal="${invoice.id}" ${isClosed ? "disabled" : ""}>
+              ${icon("message-share")}
             </button>
             <button class="mini-button" type="button" title="Markera skickad" aria-label="Markera skickad" data-invoice-status="sent" data-invoice-id="${invoice.id}" ${isClosed ? "disabled" : ""}>
-              <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"></path></svg>
+              ${icon("send")}
             </button>
             <button class="mini-button" type="button" title="Markera betald" aria-label="Markera betald" data-invoice-status="paid" data-invoice-id="${invoice.id}" ${["credited", "reopened"].includes(invoice.status) ? "disabled" : ""}>
-              <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg>
+              ${icon("check")}
             </button>
             <button class="mini-button" type="button" title="Kreditera" aria-label="Kreditera" data-invoice-status="credited" data-invoice-id="${invoice.id}" ${["credited", "reopened"].includes(invoice.status) ? "disabled" : ""}>
-              <svg viewBox="0 0 24 24"><path d="M5 5h14M7 9h10M9 13h6M8 19l8-8"></path></svg>
+              ${icon("receipt-refund")}
             </button>
             <button class="mini-button" type="button" title="Återöppna" aria-label="Återöppna" data-invoice-reopen="${invoice.id}" ${isClosed ? "disabled" : ""}>
-              <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.2M21 5v6h-6M21 12a9 9 0 0 1-15.5 6.2M3 19v-6h6"></path></svg>
+              ${icon("refresh")}
             </button>
           </div>
         </td>
@@ -5130,6 +7371,43 @@ function focusElement(element) {
 function openDrawer(kind) {
   const content = getDrawerContent(kind);
   setDrawerContent(content);
+}
+
+function handleDrawerCommand(command) {
+  if (command === "actionable-approvals" || command === "open-reports") {
+    setView("reports");
+    if (els.approvalStatusFilter) els.approvalStatusFilter.value = command === "actionable-approvals" ? "open" : "all";
+    if (els.approvalKindFilter) els.approvalKindFilter.value = "all";
+    renderApprovalFlow();
+    closeDrawer();
+    els.approvalList?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast(command === "actionable-approvals" ? "Visar öppna attestposter." : "Öppnade rapporter.");
+    return;
+  }
+
+  if (command === "invoice-ready") {
+    setView("invoice");
+    if (els.invoiceReadinessFilter) els.invoiceReadinessFilter.value = "ready";
+    renderInvoiceWorkbench();
+    closeDrawer();
+    scrollToPageTarget("invoice-history");
+    showToast("Visar fakturaunderlag och klara utkast.");
+    return;
+  }
+
+  if (command === "portal-open") {
+    setView("portal");
+    closeDrawer();
+    showToast("Öppnade kundportalens arbetsyta.");
+    return;
+  }
+
+  if (command === "admin-users" || command === "account-requests") {
+    setView("reports");
+    closeDrawer();
+    scrollToPageTarget(command === "account-requests" ? "account-request-list" : "admin-overview");
+    showToast(command === "account-requests" ? "Visar kontoansökningar." : "Visar roller och systemstatus.");
+  }
 }
 
 function setDrawerContent(content) {
@@ -5392,47 +7670,139 @@ function getNotificationItems() {
       title: `Kundportal · ${getPortalStatusLabel(task.status)}`,
       text: `${task.title} · ${getClient(task.clientId)?.name || "Okänd kund"} · förfaller ${task.dueDate || "-"}`,
       action: "portal",
-      actionLabel: "Öppna portal"
+      actionLabel: "Öppna portal",
+      tone: task.status === "rejected" ? "warning" : "info",
+      group: "Kund"
     })),
     ...changedInvoices.map((invoice) => ({
       title: `Faktura ${getInvoiceStatusLabel(getEffectiveInvoiceStatus(invoice)).toLowerCase()}`,
       text: `${invoice.number} · ${getClient(invoice.clientId)?.name || "Okänd kund"} · ${formatSEK(Number(invoice.totalInclVat || invoice.total || 0))}`,
       action: "invoice",
-      actionLabel: "Öppna fakturering"
+      actionLabel: "Öppna fakturering",
+      tone: getEffectiveInvoiceStatus(invoice) === "overdue" ? "warning" : "success",
+      group: "Fakturering"
     })),
     ...openApprovals.slice(0, 6).map((item) => ({
       title: getApprovalStatusLabel(item.status),
       text: `${item.title} · ${item.subtitle}`,
       action: "reports",
-      actionLabel: "Öppna attest"
+      actionLabel: "Öppna attest",
+      tone: isApprovalBlocked(item.status) ? "warning" : "info",
+      group: "Attest"
     })),
     ...draftInvoices.slice(0, 4).map((project) => ({
       title: "Fakturautkast",
       text: `${project.name} ligger som utkast.`,
       action: "invoice",
-      actionLabel: "Öppna fakturering"
+      actionLabel: "Öppna fakturering",
+      tone: "neutral",
+      group: "Fakturering"
     })),
     ...unsignedAgreements.slice(0, 4).map((agreement) => ({
       title: "Avtal skickat",
       text: `${agreement.title} väntar på kundens signering.`,
       action: "agreements",
-      actionLabel: "Öppna avtal"
+      actionLabel: "Öppna avtal",
+      tone: "info",
+      group: "Avtal"
     }))
   ];
+}
+
+function getSystemHealthItems() {
+  const settings = state.settings || defaultState.settings;
+  const customerUsers = state.users.filter((user) => user.role === "customer");
+  const unlinkedCustomerUsers = customerUsers.filter((user) => !user.clientId).length;
+  const openApprovals = getApprovalItems().length;
+  const invoiceRows = getInvoiceRows();
+  const readyInvoices = invoiceRows.filter(isInvoiceRowReady).length;
+  const blockedInvoices = invoiceRows.filter((row) => row.warning > 0).length;
+  const pendingRequests = [...state.accountRequests, ...cloudAccountRequests].filter((request) => request.status === "pending").length;
+  return [
+    {
+      label: "Moln",
+      value: isSupabaseReady() ? (cloudSession?.user ? "Inloggad" : "Redo") : "Lokal",
+      ok: isSupabaseReady() && Boolean(settings.companyName),
+      text: isSupabaseReady() ? "Supabase är konfigurerat. Logga in för synk." : "Appen använder lokal lagring tills Supabase är aktivt.",
+      action: "cloud",
+      actionLabel: "Molnstatus"
+    },
+    {
+      label: "Attest",
+      value: String(openApprovals),
+      ok: openApprovals === 0,
+      text: openApprovals ? "Det finns underlag som behöver beslut." : "Inga öppna attestposter.",
+      command: "actionable-approvals",
+      actionLabel: "Visa attest"
+    },
+    {
+      label: "Fakturering",
+      value: `${readyInvoices}/${invoiceRows.length}`,
+      ok: blockedInvoices === 0,
+      text: blockedInvoices ? `${blockedInvoices} underlag har spärrar innan faktura.` : "Fakturaunderlagen är rena.",
+      command: "invoice-ready",
+      actionLabel: "Visa underlag"
+    },
+    {
+      label: "Kundportal",
+      value: `${customerUsers.length}`,
+      ok: customerUsers.length > 0 && unlinkedCustomerUsers === 0,
+      text: unlinkedCustomerUsers ? `${unlinkedCustomerUsers} kundkonton saknar kundkoppling.` : "Kundkonton och portalflöden är kopplade.",
+      command: "admin-users",
+      actionLabel: "Hantera"
+    },
+    {
+      label: "Konton",
+      value: String(pendingRequests),
+      ok: pendingRequests === 0,
+      text: pendingRequests ? "Kontoansökningar väntar på admin." : "Inga väntande kontoansökningar.",
+      command: "account-requests",
+      actionLabel: "Granska"
+    }
+  ];
+}
+
+function renderDrawerKpis(items) {
+  return `
+    <div class="drawer-kpi-grid">
+      ${items.map((item) => `
+        <article class="drawer-kpi ${item.ok ? "ok" : "warning"}">
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${escapeHtml(item.value)}</strong>
+          <small>${escapeHtml(item.text)}</small>
+          ${item.command ? `<button class="ghost-button small-button" type="button" data-drawer-command="${escapeHtml(item.command)}">${escapeHtml(item.actionLabel)}</button>` : `<button class="ghost-button small-button" type="button" data-drawer-open="${escapeHtml(item.action)}">${escapeHtml(item.actionLabel)}</button>`}
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function getActiveViewName() {
+  return [...els.views].find((view) => view.classList.contains("active"))?.id?.replace("-view", "") || "dashboard";
 }
 
 function getDrawerContent(kind) {
   const settings = state.settings || defaultState.settings;
   if (kind === "cloud") {
     const configured = isSupabaseReady();
+    const health = getSystemHealthItems();
     return {
       eyebrow: "Supabase",
       title: configured ? "Molnanslutning redo" : "Molnanslutning saknas",
       body: `
+        ${renderDrawerKpis(health.slice(0, 2))}
         <div class="drawer-list">
           <article class="drawer-list-item">
             <strong>Status</strong>
             <span>${configured ? "Supabase-klienten är laddad med Project URL och anon public key." : "Supabase SDK eller konfiguration saknas. Appen kör lokalt tills detta är löst."}</span>
+          </article>
+          <article class="drawer-list-item ${cloudHealth.database ? "success" : configured ? "warning" : "neutral"}">
+            <strong>Databas</strong>
+            <span>${cloudHealth.database ? `Ansluten. Kontrollerade tabeller: ${cloudHealth.tables.join(", ")}.` : configured ? `Inte kontrollerad eller delvis blockerad.${cloudHealth.error ? ` ${escapeHtml(cloudHealth.error)}` : ""}` : "Ingen databasanslutning."}</span>
+          </article>
+          <article class="drawer-list-item ${cloudHealth.auth ? "success" : configured ? "warning" : "neutral"}">
+            <strong>Auth</strong>
+            <span>${cloudHealth.auth ? "Supabase Auth svarar." : configured ? "Auth är inte verifierad ännu. Klicka på Uppdatera status." : "Auth saknar konfiguration."}</span>
           </article>
           <article class="drawer-list-item">
             <strong>Session</strong>
@@ -5442,13 +7812,21 @@ function getDrawerContent(kind) {
             <strong>Profil</strong>
             <span>${cloudProfile ? `${escapeHtml(cloudProfile.full_name || cloudProfile.email || "Profil")} · ${escapeHtml(cloudProfile.role || "roll saknas")} · ${cloudProfile.is_active ? "aktiv" : "väntar på godkännande"}` : "Ingen profilrad hittad. Första admin behöver läggas in i Supabase-tabellen profiles."}</span>
           </article>
+          <article class="drawer-list-item ${canUseCloudData() ? "success" : "warning"}">
+            <strong>Nästa krav</strong>
+            <span>${canUseCloudData() ? "Molnsynk kan användas för kunder, projekt och tidrader." : "För full molnsynk behövs inloggning, aktiv profil och organization_id."}</span>
+          </article>
         </div>
         ${cloudSession?.user ? `
           <div class="drawer-actions">
             <button class="ghost-button" type="button" data-cloud-action="refresh">Uppdatera status</button>
             <button class="primary-button" type="button" data-cloud-action="signout">Logga ut</button>
+            <button class="ghost-button" type="button" data-drawer-command="admin-users">Hantera roller</button>
           </div>
         ` : `
+          <div class="drawer-actions">
+            <button class="ghost-button" type="button" data-cloud-action="refresh">Kontrollera anslutning</button>
+          </div>
           <form class="drawer-form" id="cloud-login-form">
             <label>E-post<input name="email" type="email" placeholder="din e-post" required></label>
             <label>Lösenord<input name="password" type="password" placeholder="lösenord" required></label>
@@ -5473,7 +7851,7 @@ function getDrawerContent(kind) {
           </form>
         `}
         <div class="info-banner warning-banner">
-          Lokal data flyttas inte automatiskt än. Nästa steg är en kontrollerad migrering från localStorage till Supabase-tabellerna.
+          Lokal data flyttas inte automatiskt än. Nästa produktionssteg är kontrollerad migrering, RLS-regler och admin-godkännande i Supabase.
         </div>
       `
     };
@@ -5481,13 +7859,22 @@ function getDrawerContent(kind) {
 
   if (kind === "notifications") {
     const items = getNotificationItems();
+    const groups = Object.entries(groupBy(items, (item) => item.group || "Övrigt"));
     return {
       eyebrow: "Aviseringar",
       title: items.length ? `${items.length} saker att följa upp` : "Allt är i fas",
       body: items.length ? `
+        <div class="drawer-command-grid">
+          ${groups.map(([group, groupItems]) => `
+            <button type="button" data-drawer-command="${group === "Attest" ? "actionable-approvals" : group === "Fakturering" ? "invoice-ready" : group === "Kund" ? "portal-open" : "open-reports"}">
+              <span>${escapeHtml(group)}</span>
+              <strong>${groupItems.length}</strong>
+            </button>
+          `).join("")}
+        </div>
         <div class="drawer-list">
           ${items.map((item) => `
-            <article class="drawer-list-item">
+            <article class="drawer-list-item ${escapeHtml(item.tone || "info")}">
               <div>
                 <strong>${escapeHtml(item.title)}</strong>
                 <span>${escapeHtml(item.text)}</span>
@@ -5506,10 +7893,26 @@ function getDrawerContent(kind) {
   }
 
   if (kind === "help") {
+    const activeView = getActiveViewName();
+    const viewHelp = {
+      dashboard: ["Startytan visar planering, nyheter, kalender och genvägar.", "Använd snabbsök eller aviseringar för att hoppa direkt till nästa uppgift."],
+      time: ["Tidsrapportering är huvudflödet: timer, manuell tidsrad, kvitton, resor och månadsregistrering.", "Skicka utkast till attest innan de går vidare till lön eller faktura."],
+      invoice: ["Fakturering samlar preliminära underlag, utkast och fakturahistorik.", "Klara underlag kan sparas som utkast eller skapas som faktura direkt."],
+      reports: ["Rapporter visar rapportbibliotek, attestflöde, användare och kontoansökningar.", "Klicka på rapportresultat för att öppna rätt arbetsyta."],
+      portal: ["Kundportalen är kundens yta för uppgifter, dokument, fakturor och kommentarer.", "Byrån kan skapa uppgifter och kunden kan lämna in underlag."],
+      agreements: ["Avtal kan skapas, förhandsgranskas, skickas och användas som grund för e-signering.", "Arkivet håller signerade eller avslutade uppdrag separerade."],
+      esign: ["E-signeringar följer status, påminnelsedatum och förfallodatum.", "När dokumentet är signerat kan kopplat avtal markeras som signerat."],
+      clients: ["Kontakter är CRM-grunden för kunder, ansvariga, projekt, avtal och fakturering.", "Komplettera faktura-e-post och adress innan skarpa fakturor skickas."],
+      projects: ["Projekt binder samman kund, arbetsorder, timmar, budget och fakturaunderlag.", "Projektkortet visar både ekonomi och underlag som behöver åtgärd."]
+    };
+    const help = viewHelp[activeView] || ["Den här vyn är kopplad till samma dataflöde.", "Använd rapporter och snabbsök för att hitta nästa åtgärd."];
     return {
       eyebrow: "Hjälp",
       title: `Hjälp för ${els.pageTitle.textContent}`,
       body: `
+        <div class="info-banner">
+          ${escapeHtml(help[0])} ${escapeHtml(help[1])}
+        </div>
         <div class="drawer-list">
           <article class="drawer-list-item">
             <strong>1. Registrera underlag</strong>
@@ -5524,9 +7927,15 @@ function getDrawerContent(kind) {
             <span>Fakturering tar bara med attesterade poster som ännu inte är fakturerade.</span>
           </article>
         </div>
+        <div class="drawer-workflow">
+          <span>Rekommenderat flöde</span>
+          <strong>Tid → Attest → Faktura/Lön → Kundportal</strong>
+          <small>Alla steg finns i appen och binds samman av status på tidsrader, kvitton, avtal och fakturor.</small>
+        </div>
         <div class="drawer-actions">
           <button class="primary-button" type="button" data-drawer-view="time">Ny registrering</button>
           <button class="ghost-button" type="button" data-drawer-view="reports">Öppna attestflöde</button>
+          <button class="ghost-button" type="button" data-drawer-view="invoice">Fakturering</button>
         </div>
       `
     };
@@ -5538,23 +7947,40 @@ function getDrawerContent(kind) {
       title: "Byråprofil och regler",
       body: `
         <form class="drawer-form" id="settings-form">
-          <label>Företagsnamn<input id="settings-company" type="text" value="${escapeHtml(settings.companyName)}"></label>
-          <label>Admin e-post<input id="settings-email" type="email" value="${escapeHtml(settings.adminEmail)}"></label>
-          <label>Standard timpris<input id="settings-rate" type="number" min="0" step="50" value="${Number(settings.defaultRate || 0)}"></label>
-          <label>Attestregel
-            <select id="settings-approval">
-              <option value="admin" ${settings.approvalMode === "admin" ? "selected" : ""}>Admin attesterar allt</option>
-              <option value="owner" ${settings.approvalMode === "owner" ? "selected" : ""}>Kundansvarig attesterar</option>
-              <option value="self" ${settings.approvalMode === "self" ? "selected" : ""}>Egen attest tillåten</option>
-            </select>
-          </label>
-          <label>Vecka låses<input id="settings-lock-day" type="text" value="${escapeHtml(settings.weekLockDay)}"></label>
-          <label>Fakturaprefix<input id="settings-invoice-prefix" type="text" value="${escapeHtml(settings.invoicePrefix || "F")}"></label>
-          <label>Nästa fakturanummer<input id="settings-next-invoice" type="number" min="1" step="1" value="${Number(settings.nextInvoiceNumber || 1)}"></label>
-          <label>Standard betalvillkor<input id="settings-payment-terms" type="number" min="0" step="1" value="${Number(settings.paymentTerms || 10)}"></label>
-          <label>Standard moms %<input id="settings-vat-rate" type="number" min="0" step="1" value="${Number(settings.vatRate ?? 25)}"></label>
-          <label>Bankgiro<input id="settings-bankgiro" type="text" value="${escapeHtml(settings.bankgiro || "")}"></label>
-          <label>Fakturatext<input id="settings-invoice-footer" type="text" value="${escapeHtml(settings.invoiceFooter || "")}"></label>
+          <div class="drawer-form-section">
+            <strong>Byråprofil</strong>
+            <label>Företagsnamn<input id="settings-company" type="text" value="${escapeHtml(settings.companyName)}"></label>
+            <label>Admin e-post<input id="settings-email" type="email" value="${escapeHtml(settings.adminEmail)}"></label>
+            <label>Standard timpris<input id="settings-rate" type="number" min="0" step="50" value="${Number(settings.defaultRate || 0)}"></label>
+            <label>Normal arbetsdag, timmar<input id="settings-workday-hours" type="number" min="0" step="0.5" value="${Number(settings.workdayHours ?? 8)}"></label>
+          </div>
+          <div class="drawer-form-section">
+            <strong>Tid och attest</strong>
+            <label>Attestregel
+              <select id="settings-approval">
+                <option value="admin" ${settings.approvalMode === "admin" ? "selected" : ""}>Admin attesterar allt</option>
+                <option value="owner" ${settings.approvalMode === "owner" ? "selected" : ""}>Kundansvarig attesterar</option>
+                <option value="self" ${settings.approvalMode === "self" ? "selected" : ""}>Egen attest tillåten</option>
+              </select>
+            </label>
+            <label>Vecka låses<input id="settings-lock-day" type="text" value="${escapeHtml(settings.weekLockDay)}"></label>
+            <label>Standard förfallodagar för kunduppgift<input id="settings-default-due-days" type="number" min="1" step="1" value="${Number(settings.defaultDueDays || 7)}"></label>
+          </div>
+          <div class="drawer-form-section">
+            <strong>Fakturering</strong>
+            <label>Fakturaprefix<input id="settings-invoice-prefix" type="text" value="${escapeHtml(settings.invoicePrefix || "F")}"></label>
+            <label>Nästa fakturanummer<input id="settings-next-invoice" type="number" min="1" step="1" value="${Number(settings.nextInvoiceNumber || 1)}"></label>
+            <label>Standard betalvillkor<input id="settings-payment-terms" type="number" min="0" step="1" value="${Number(settings.paymentTerms || 10)}"></label>
+            <label>Standard moms %<input id="settings-vat-rate" type="number" min="0" step="1" value="${Number(settings.vatRate ?? 25)}"></label>
+            <label>Påminnelse efter dagar<input id="settings-invoice-reminder-days" type="number" min="1" step="1" value="${Number(settings.invoiceReminderDays || 5)}"></label>
+            <label>Bankgiro<input id="settings-bankgiro" type="text" value="${escapeHtml(settings.bankgiro || "")}"></label>
+            <label>Fakturatext<input id="settings-invoice-footer" type="text" value="${escapeHtml(settings.invoiceFooter || "")}"></label>
+          </div>
+          <div class="drawer-form-section">
+            <strong>Kundportal</strong>
+            <label class="drawer-checkbox"><input id="settings-portal-auto-notify" type="checkbox" ${settings.portalAutoNotify === false ? "" : "checked"}> Skapa avisering när kunduppgift läggs upp</label>
+            <label class="drawer-checkbox"><input id="settings-customer-approval-required" type="checkbox" ${settings.customerApprovalRequired === false ? "" : "checked"}> Kund ska kunna godkänna fakturor i portalen</label>
+          </div>
           <button class="primary-button" type="submit">Spara inställningar</button>
         </form>
       `
@@ -5565,6 +7991,7 @@ function getDrawerContent(kind) {
     eyebrow: "Information",
     title: settings.companyName,
     body: `
+      ${renderDrawerKpis(getSystemHealthItems())}
       <div class="drawer-list">
         <article class="drawer-list-item">
           <strong>Lokal prototyp</strong>
@@ -5574,10 +8001,15 @@ function getDrawerContent(kind) {
           <strong>Aktiva moduler</strong>
           <span>Tid, kvitton, resor, kunder, avtal, e-signering, attest, rapporter och fakturaunderlag.</span>
         </article>
+        <article class="drawer-list-item">
+          <strong>Roll och behörighet</strong>
+          <span>Aktiv roll är ${escapeHtml(roleLabels[getCurrentUser().role] || getCurrentUser().role)}. Behörighet styr vilka vyer rollen kan öppna.</span>
+        </article>
       </div>
       <div class="drawer-actions">
         <button class="ghost-button" type="button" data-drawer-view="reports">Se rapporter</button>
         <button class="primary-button" type="button" data-drawer-view="clients">Öppna kunder</button>
+        <button class="ghost-button" type="button" data-drawer-command="admin-users">Roller och konton</button>
       </div>
     `
   };
@@ -5682,17 +8114,25 @@ function runGlobalSearch(query) {
 
   const target = [
     { keys: ["tid", "kvitto", "kvitton", "frånvaro", "resa", "traktamente", "milersättning"], view: "time" },
+    { keys: ["uppgift", "uppgifter", "attest", "attestera", "godkänn", "godkänna"], view: "tasks" },
     { keys: ["kund", "kunder", "kontakt", "kontakter"], view: "clients" },
+    { keys: ["affär", "affärer", "sälj", "säljtavla", "offert", "offerter"], view: "sales" },
     { keys: ["projekt", "arbetsorder"], view: "projects" },
     { keys: ["avtal", "kundavtal"], view: "agreements" },
     { keys: ["sign", "signering", "e-signering"], view: "esign" },
     { keys: ["faktura", "fakturering", "fakturera", "underlag"], view: "invoice" },
-    { keys: ["rapport", "rapporter", "analys", "lön", "löner"], view: "reports" },
-    { keys: ["portal", "ärende", "kundportal", "underlag"], view: "portal" }
+    { keys: ["planering", "resurs", "resursplanering", "schema", "kapacitet"], view: "planning" },
+    { keys: ["rapport", "rapporter", "lön", "löner"], view: "reports" },
+    { keys: ["analys", "nyckeltal", "debiteringsgrad", "uppföljning"], view: "analysis" },
+    { keys: ["portal", "ärende", "kundportal", "underlag"], view: "portal" },
+    { keys: ["samarbete", "samarbetsyta", "delning", "kunddialog"], view: "collaboration" },
+    { keys: ["version", "versioner", "testa", "testläge"], view: "versions" },
+    { keys: ["admin", "inställning", "inställningar", "konto", "konton", "roller", "behörighet"], view: "reports", scrollTarget: "admin-overview" }
   ].find((item) => item.keys.some((key) => normalized.includes(key)));
 
   if (target) {
     setView(target.view);
+    scrollToPageTarget(target.scrollTarget);
     showToast(`Öppnade ${viewTitles[target.view].toLowerCase()} via snabbsök.`);
     return;
   }
@@ -5837,16 +8277,20 @@ function setApprovalStatus(kind, id, status, note = "") {
     showToast("Posten är redan fakturerad och är låst.", "warning");
     return false;
   }
+  if (target.date && isDateLocked(target.date)) {
+    showToast("Perioden är låst. Lås upp perioden innan status ändras.", "warning");
+    return false;
+  }
   target.status = status;
   target.reviewNote = note;
   return true;
 }
 
-async function handleApprovalAction(action, kind, id) {
+async function handleApprovalAction(action, kind, id, options = {}) {
   if (!action || !kind || !id) return false;
-  if (kind === "agreement") return handleAgreementWorkflowAction(action, id);
-  if (kind === "esign") return handleEsignWorkflowAction(action, id);
-  if (kind === "invoice") return handleInvoiceWorkflowAction(action, id);
+  if (kind === "agreement") return handleAgreementWorkflowAction(action, id, options);
+  if (kind === "esign") return handleEsignWorkflowAction(action, id, options);
+  if (kind === "invoice") return handleInvoiceWorkflowAction(action, id, options);
 
   const messages = {
     submit: "Underlaget skickades in för attest.",
@@ -5855,7 +8299,7 @@ async function handleApprovalAction(action, kind, id) {
   };
 
   if (action === "reject") {
-    const note = window.prompt("Skriv gärna varför underlaget avvisas:", "Komplettera underlaget.");
+    const note = options.note ?? window.prompt("Skriv gärna varför underlaget avvisas:", "Komplettera underlaget.");
     if (note === null) return false;
     if (!setApprovalStatus(kind, id, "rejected", note.trim() || "Komplettera underlaget.")) return false;
   } else if (action === "approve") {
@@ -5880,7 +8324,7 @@ async function handleApprovalAction(action, kind, id) {
 
   saveState();
   renderAll();
-  showToast(messages[action]);
+  if (!options.silent) showToast(messages[action]);
   return true;
 }
 
@@ -5944,7 +8388,7 @@ function toggleExpenseFlag(kind, id, field) {
   showToast(`${item[field] ? "Markerad för" : "Borttagen från"} ${target}.`);
 }
 
-function handleAgreementWorkflowAction(action, id) {
+function handleAgreementWorkflowAction(action, id, options = {}) {
   const agreement = getAgreement(id);
   if (!agreement) return false;
 
@@ -5952,7 +8396,7 @@ function handleAgreementWorkflowAction(action, id) {
     agreement.status = "sent";
     agreement.sentAt = isoToday;
     prepareAgreementEmail(agreement);
-    showToast("Mejlutkast för avtalet öppnades och avtalet markerades som skickat.");
+    if (!options.silent) showToast("Mejlutkast för avtalet öppnades och avtalet markerades som skickat.");
   } else if (action === "approve") {
     agreement.status = "signed";
     agreement.signedAt = isoToday;
@@ -5962,11 +8406,13 @@ function handleAgreementWorkflowAction(action, id) {
         item.status = "signed";
         item.signedAt = isoToday;
       });
-    showToast("Avtalet markerades som signerat.");
+    if (!options.silent) showToast("Avtalet markerades som signerat.");
   } else if (action === "reject") {
     agreement.status = "draft";
-    agreement.reviewNote = window.prompt("Anteckning till avtalet:", "Behöver justeras innan utskick.") || "";
-    showToast("Avtalet flyttades tillbaka till utkast.");
+    const note = options.note ?? window.prompt("Anteckning till avtalet:", "Behöver justeras innan utskick.");
+    if (note === null) return false;
+    agreement.reviewNote = note || "";
+    if (!options.silent) showToast("Avtalet flyttades tillbaka till utkast.");
   } else {
     return false;
   }
@@ -5976,13 +8422,13 @@ function handleAgreementWorkflowAction(action, id) {
   return true;
 }
 
-function handleEsignWorkflowAction(action, id) {
+function handleEsignWorkflowAction(action, id, options = {}) {
   const item = state.esignatures.find((signature) => signature.id === id);
   if (!item) return false;
 
   if (action === "submit") {
     if (!prepareEsignEmail(item)) return false;
-    showToast("Mejlutkast för signeringen öppnades.");
+    if (!options.silent) showToast("Mejlutkast för signeringen öppnades.");
   } else if (action === "approve") {
     item.status = "signed";
     item.signedAt = isoToday;
@@ -5991,11 +8437,11 @@ function handleEsignWorkflowAction(action, id) {
       agreement.status = "signed";
       agreement.signedAt = isoToday;
     }
-    showToast("Signeringen markerades som signerad.");
+    if (!options.silent) showToast("Signeringen markerades som signerad.");
   } else if (action === "remind") {
     if (!prepareEsignEmail(item, true)) return false;
     item.reminderDate = isoToday;
-    showToast("Påminnelseutkast öppnades.");
+    if (!options.silent) showToast("Påminnelseutkast öppnades.");
   } else {
     return false;
   }
@@ -6005,20 +8451,27 @@ function handleEsignWorkflowAction(action, id) {
   return true;
 }
 
-function handleInvoiceWorkflowAction(action, id) {
+function handleInvoiceWorkflowAction(action, id, options = {}) {
   const invoice = (state.invoices || []).find((item) => item.id === id);
   if (!invoice) return false;
 
   if (action === "submit") {
     if (!sendInvoiceEmail(invoice.id)) return false;
-    showToast("E-postutkast öppnades och fakturan markerades som skickad.");
+    if (!options.silent) showToast("E-postutkast öppnades och fakturan markerades som skickad.");
   } else if (action === "approve") {
     if (!setInvoiceStatus(invoice.id, "paid")) return false;
-    showToast("Fakturan markerades som betald.");
+    if (!options.silent) showToast("Fakturan markerades som betald.");
   } else if (action === "reject") {
-    if (!window.confirm("Vill du markera fakturan som krediterad?")) return false;
+    if (getEffectiveInvoiceStatus(invoice) === "changeRequested") {
+      if (!reopenInvoice(invoice.id)) return false;
+      if (!options.silent) showToast("Fakturan återöppnades för ändring.");
+      saveState();
+      renderAll();
+      return true;
+    }
+    if (!options.confirmedCredit && !window.confirm("Vill du markera fakturan som krediterad?")) return false;
     if (!setInvoiceStatus(invoice.id, "credited")) return false;
-    showToast("Fakturan markerades som krediterad.");
+    if (!options.silent) showToast("Fakturan markerades som krediterad.");
   } else {
     return false;
   }
@@ -6211,6 +8664,8 @@ function renderAll() {
   renderPlanning();
   renderAnalysis();
   renderPortal();
+  renderCollaboration();
+  renderVersions();
   renderReports();
 }
 
@@ -6220,25 +8675,40 @@ function setView(viewName) {
     viewName = getDefaultViewForCurrentUser();
   }
   els.navItems.forEach((button) => button.classList.toggle("active", button.dataset.view === viewName));
+  els.navGroups?.forEach((group) => {
+    const groupView = group.dataset.navGroup;
+    const hasShortcut = Boolean(group.querySelector(`[data-view-shortcut="${viewName}"]`));
+    group.classList.toggle("open", groupView === viewName || hasShortcut);
+  });
   els.moduleItems.forEach((button) => button.classList.remove("active"));
   els.views.forEach((view) => view.classList.toggle("active", view.id === `${viewName}-view`));
   els.pageTitle.textContent = viewTitles[viewName] || "Start";
+  syncHashToView(viewName);
+}
+
+function scrollToPageTarget(targetId) {
+  if (!targetId) return;
+  window.setTimeout(() => {
+    const target = document.getElementById(targetId);
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 40);
 }
 
 function openModule(moduleName, button) {
   const moduleTargets = {
-    tasks: "time",
-    sales: "clients",
-    projects: "clients",
-    planning: "reports",
-    analysis: "reports",
-    partner: "portal"
+    tasks: "tasks",
+    sales: "sales",
+    projects: "projects",
+    planning: "planning",
+    analysis: "analysis",
+    partner: "collaboration"
   };
-  setView(moduleTargets[moduleName] || "dashboard");
+  const targetView = moduleTargets[moduleName] || "dashboard";
+  setView(targetView);
   els.navItems.forEach((item) => item.classList.remove("active"));
   button.classList.add("active");
-  els.pageTitle.textContent = button.textContent.trim();
-  showToast(`${button.textContent.trim()} är kopplad till närmaste färdiga vy i prototypen.`);
+  els.pageTitle.textContent = viewTitles[targetView] || button.textContent.trim();
+  showToast(`Öppnade ${viewTitles[targetView]?.toLowerCase() || button.textContent.trim().toLowerCase()}.`);
 }
 
 function setTimePeriodMode(mode, anchorDate = selectedTimeAnchorDate) {
@@ -6252,6 +8722,10 @@ function setTimePeriodMode(mode, anchorDate = selectedTimeAnchorDate) {
 }
 
 async function addEntry(entry) {
+  if (isDateLocked(entry.date || selectedTimeAnchorDate)) {
+    showToast("Perioden är låst. Lås upp perioden innan du lägger till eller ändrar tid.", "warning");
+    return null;
+  }
   const row = {
     id: makeId(),
     date: entry.date,
@@ -6332,52 +8806,133 @@ function copyPreviousEntryToForm() {
   showToast("Föregående tidsrad kopierades till manuell registrering.");
 }
 
-function startTimer() {
-  if (!els.timerClient.value) {
-    showToast("Välj kund innan du startar timern.", "warning");
-    return;
-  }
-  timer.running = true;
-  timer.startedAt = Date.now();
-  timer.elapsedSeconds = 0;
-  timer.interval = window.setInterval(updateTimerDisplay, 1000);
-  els.startTimer.disabled = true;
-  els.stopTimer.disabled = false;
-  els.timerStatus.textContent = "Aktiv";
-  els.globalTimerButton?.classList.add("running");
-  updateTimerDisplay();
-  showToast("Timern startade.");
+function getTimerSeconds() {
+  if (!timer.running || !timer.startedAt) return timer.elapsedSeconds;
+  return timer.elapsedSeconds + Math.round((Date.now() - timer.startedAt) / 1000);
 }
 
-async function stopTimer() {
-  if (!timer.running) return;
-
-  window.clearInterval(timer.interval);
-  timer.elapsedSeconds = Math.max(60, Math.round((Date.now() - timer.startedAt) / 1000));
-  const hours = Math.max(0.1, Math.round((timer.elapsedSeconds / 3600) * 10) / 10);
-
-  await addEntry({
-    date: isoToday,
-    employee: getCurrentUser().name,
+function getTimerContextFromForm() {
+  const client = getClient(els.timerClient.value);
+  const project = getProject(els.timerProject.value);
+  return {
     type: els.timerType.value,
     clientId: els.timerClient.value,
     projectId: els.timerProject.value,
     workOrder: els.timerWorkOrder.value.trim(),
     task: els.timerTask.value,
-    hours,
-    billable: els.timerType.value === "project",
-    payroll: true,
-    status: "draft",
-    description: els.timerDescription.value.trim()
-  });
+    description: els.timerDescription.value.trim(),
+    clientName: client?.name || "Ingen kund",
+    projectName: project?.name || els.timerWorkOrder.value.trim() || "Ingen arbetsorder"
+  };
+}
 
+function resetTimerState() {
+  window.clearInterval(timer.interval);
   timer.running = false;
   timer.startedAt = null;
   timer.elapsedSeconds = 0;
-  els.startTimer.disabled = false;
-  els.stopTimer.disabled = true;
-  els.timerStatus.textContent = "Pausad";
-  els.globalTimerButton?.classList.remove("running");
+  timer.interval = null;
+  timer.context = null;
+}
+
+function renderTimerControls() {
+  const hasTime = getTimerSeconds() > 0;
+  if (els.startTimer) {
+    els.startTimer.disabled = timer.running;
+    els.startTimer.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"></path></svg>
+      ${hasTime && !timer.running ? "Fortsätt" : "Starta"}
+    `;
+  }
+  if (els.pauseTimer) {
+    els.pauseTimer.disabled = !timer.running;
+    els.pauseTimer.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"></path></svg>
+      Pausa
+    `;
+  }
+  if (els.stopTimer) els.stopTimer.disabled = !hasTime;
+  if (els.timerStatus) {
+    els.timerStatus.textContent = timer.running ? "Aktiv" : hasTime ? "Pausad" : "Pausad";
+    els.timerStatus.classList.toggle("running", timer.running);
+  }
+  els.globalTimerButton?.classList.toggle("running", timer.running);
+}
+
+function renderTimerLiveMeta() {
+  if (!els.timerLiveMeta) return;
+  const context = timer.context || getTimerContextFromForm();
+  const seconds = getTimerSeconds();
+  const billableText = context.type === "project" ? "Debiterbar tid" : "Interntid";
+  const hasContext = Boolean(context.clientId || context.projectId || context.workOrder || context.description);
+  els.timerLiveMeta.innerHTML = seconds || hasContext ? `
+    <strong>${escapeHtml(context.clientName)} · ${escapeHtml(context.projectName)}</strong>
+    <span>${seconds ? "Aktiv/förberedd" : "Förberedd timer"} · ${escapeHtml(billableText)} · ${escapeHtml(context.task)}${context.description ? ` · ${escapeHtml(context.description)}` : ""}</span>
+  ` : `
+    <strong>Ingen aktiv timer</strong>
+    <span>Välj kund, projekt och aktivitet innan du startar.</span>
+  `;
+}
+
+function startTimer() {
+  if (!els.timerClient.value) {
+    showToast("Välj kund innan du startar timern.", "warning");
+    return;
+  }
+  if (isDateLocked(isoToday)) {
+    showToast("Dagens period är låst och kan inte ta emot ny tid.", "warning");
+    return;
+  }
+  window.clearInterval(timer.interval);
+  timer.context = getTimerContextFromForm();
+  timer.running = true;
+  timer.startedAt = Date.now();
+  timer.interval = window.setInterval(updateTimerDisplay, 1000);
+  updateTimerDisplay();
+  showToast(timer.elapsedSeconds ? "Timern fortsätter." : "Timern startade.");
+}
+
+function pauseTimer() {
+  if (!timer.running) return;
+  timer.elapsedSeconds = getTimerSeconds();
+  timer.running = false;
+  timer.startedAt = null;
+  window.clearInterval(timer.interval);
+  timer.interval = null;
+  updateTimerDisplay();
+  showToast("Timern pausades.");
+}
+
+async function stopTimer() {
+  const elapsedSeconds = getTimerSeconds();
+  if (!elapsedSeconds) return;
+
+  window.clearInterval(timer.interval);
+  timer.elapsedSeconds = Math.max(60, elapsedSeconds);
+  const hours = Math.max(0.1, Math.round((timer.elapsedSeconds / 3600) * 10) / 10);
+  const context = timer.context || getTimerContextFromForm();
+
+  const row = await addEntry({
+    date: isoToday,
+    employee: getCurrentUser().name,
+    type: context.type,
+    clientId: context.clientId,
+    projectId: context.projectId,
+    workOrder: context.workOrder,
+    task: context.task,
+    hours,
+    billable: context.type === "project",
+    payroll: true,
+    status: "draft",
+    description: context.description
+  });
+  if (!row) {
+    resetTimerState();
+    updateTimerDisplay();
+    return;
+  }
+
+  resetTimerState();
   els.timerWorkOrder.value = "";
   els.timerDescription.value = "";
   updateTimerDisplay();
@@ -6385,12 +8940,14 @@ async function stopTimer() {
 }
 
 function updateTimerDisplay() {
-  const seconds = timer.running ? Math.round((Date.now() - timer.startedAt) / 1000) : timer.elapsedSeconds;
+  const seconds = getTimerSeconds();
   const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
   const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
   const s = String(seconds % 60).padStart(2, "0");
   els.timerDisplay.textContent = `${h}:${m}:${s}`;
   if (els.globalTimerReadout) els.globalTimerReadout.textContent = `${h}:${m}:${s}`;
+  renderTimerControls();
+  renderTimerLiveMeta();
 }
 
 function syncEntryTypeControls() {
@@ -6426,6 +8983,14 @@ function syncEntryTypeControls() {
 function syncTimerTypeControls() {
   const isProject = els.timerType.value === "project";
   els.timerWorkOrder.placeholder = isProject ? "Ex. Bokslut 2026" : "Ex. Byråmöte eller utbildning";
+  if (!isProject) els.timerProject.value = "";
+  renderTimerLiveMeta();
+}
+
+function syncClientFromProject(projectSelect, clientSelect) {
+  const project = getProject(projectSelect?.value);
+  if (!project || !clientSelect) return;
+  clientSelect.value = project.clientId;
 }
 
 function applyQuickType(type) {
@@ -6851,6 +9416,14 @@ els.tasksBoard?.addEventListener("click", (event) => {
   showToast("Öppnade arbetsflödet för uppgiften.");
 });
 
+els.tasksPipeline?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-task-status-filter]");
+  if (!button) return;
+  selectedTaskStatus = button.dataset.taskStatusFilter || "all";
+  renderTasks();
+  showToast(`Uppgifter filtreras: ${button.textContent.trim().toLowerCase()}.`);
+});
+
 els.salesNewButton?.addEventListener("click", () => {
   const client = state.clients.find(isClientVisible);
   if (client) {
@@ -6952,6 +9525,366 @@ async function approveSubmittedForEmployee(employee) {
   return count;
 }
 
+async function approveSubmittedForDay(date) {
+  let count = 0;
+  const changedEntries = [];
+  state.entries.forEach((entry) => {
+    if (entry.date === date && isEntryVisible(entry) && entry.status === "submitted") {
+      entry.status = "approved";
+      entry.reviewNote = "";
+      changedEntries.push(entry);
+      count += 1;
+    }
+  });
+  if (canUseCloudData()) {
+    for (const entry of changedEntries) {
+      try {
+        const savedEntry = await saveCloudEntry(entry);
+        if (savedEntry?.id) Object.assign(entry, savedEntry);
+      } catch (error) {
+        showToast(`En tidsrad attesterades lokalt men inte i Supabase: ${error.message}`, "warning");
+      }
+    }
+  }
+  return count;
+}
+
+function submitDraftsInSelectedPeriod() {
+  if (isSelectedTimePeriodLocked()) return 0;
+  let count = 0;
+  state.entries.forEach((entry) => {
+    if (isEntryVisible(entry) && isInSelectedTimePeriod(entry.date) && ["draft", "rejected"].includes(entry.status || "draft")) {
+      entry.status = "submitted";
+      entry.reviewNote = "";
+      count += 1;
+    }
+  });
+  state.receipts.forEach((receipt) => {
+    if (isClientVisible(getClient(receipt.clientId) || {}) && isInSelectedTimePeriod(receipt.date) && ["draft", "rejected"].includes(receipt.status || "draft")) {
+      receipt.status = "submitted";
+      receipt.reviewNote = "";
+      count += 1;
+    }
+  });
+  state.travels.forEach((travel) => {
+    if (isClientVisible(getClient(travel.clientId) || {}) && isInSelectedTimePeriod(travel.date) && ["draft", "rejected"].includes(travel.status || "draft")) {
+      travel.status = "submitted";
+      travel.reviewNote = "";
+      count += 1;
+    }
+  });
+  return count;
+}
+
+function submitSelectedPeriodToApproval() {
+  const count = submitDraftsInSelectedPeriod();
+  if (!count) {
+    showToast(isSelectedTimePeriodLocked() ? "Perioden är låst." : "Det finns inga utkast att skicka i perioden.", "warning");
+    return false;
+  }
+  saveState();
+  renderAll();
+  showToast(`${count} poster skickades till attest.`);
+  return true;
+}
+
+function handleTimeFlowAction(action) {
+  const range = getSelectedPeriodRange();
+  if (action === "submit") {
+    submitSelectedPeriodToApproval();
+    return;
+  }
+  if (action === "approval") {
+    if (els.approvalSearch) els.approvalSearch.value = selectedTimeEmployee || "";
+    if (els.approvalKindFilter) els.approvalKindFilter.value = "all";
+    if (els.approvalStatusFilter) els.approvalStatusFilter.value = "open";
+    if (els.approvalFrom) els.approvalFrom.value = range.from;
+    if (els.approvalTo) els.approvalTo.value = range.to;
+    if (els.approvalActionableOnly) els.approvalActionableOnly.checked = false;
+    setView("reports");
+    renderApprovalFlow();
+    scrollToPageTarget("approval-list");
+    showToast("Öppnade attestflödet för vald period.");
+    return;
+  }
+  if (action === "invoice") {
+    if (els.invoiceFrom) els.invoiceFrom.value = range.from;
+    if (els.invoiceTo) els.invoiceTo.value = range.to;
+    if (els.invoiceReadinessFilter) els.invoiceReadinessFilter.value = "all";
+    setView("invoice");
+    renderInvoiceWorkbench();
+    showToast("Faktureringen visar samma period som tidsrapporteringen.");
+    return;
+  }
+  if (action === "payroll") {
+    setView("reports");
+    selectedReportId = "payroll";
+    renderReports();
+    showToast("Öppnade löneunderlag för kontroll.");
+    return;
+  }
+  selectedTimeAnchorDate = range.from || isoToday;
+  if (els.entryDate) els.entryDate.value = selectedTimeAnchorDate;
+  focusElement(els.entryClient);
+  showToast("Ny tidsrad är förberedd.");
+}
+
+async function syncChangedEntriesToCloud(entries, message = "En tidsrad uppdaterades lokalt men inte i Supabase") {
+  if (!canUseCloudData() || !entries.length) return;
+  for (const entry of entries) {
+    try {
+      const savedEntry = await saveCloudEntry(entry);
+      if (savedEntry?.id) Object.assign(entry, savedEntry);
+    } catch (error) {
+      showToast(`${message}: ${error.message}`, "warning");
+    }
+  }
+}
+
+function getSelectedPeriodApprovalCollections() {
+  return {
+    entries: state.entries.filter((entry) => isEntryVisible(entry) && isInSelectedTimePeriod(entry.date)),
+    receipts: state.receipts.filter((receipt) => isClientVisible(getClient(receipt.clientId) || {}) && isInSelectedTimePeriod(receipt.date)),
+    travels: state.travels.filter((travel) => isClientVisible(getClient(travel.clientId) || {}) && isInSelectedTimePeriod(travel.date))
+  };
+}
+
+function getOwnerName(item) {
+  return item.employee || getCurrentUser().name;
+}
+
+function setSubmittedItemsApproved(items, changedEntries = []) {
+  let count = 0;
+  items.forEach((item) => {
+    if (item.status !== "submitted") return;
+    item.status = "approved";
+    item.reviewNote = "";
+    if (state.entries.includes(item)) changedEntries.push(item);
+    count += 1;
+  });
+  return count;
+}
+
+async function approveSubmittedForEmployee(employee) {
+  let count = 0;
+  const changedEntries = [];
+  const period = getSelectedPeriodApprovalCollections();
+  count += setSubmittedItemsApproved(period.entries.filter((entry) => getOwnerName(entry) === employee), changedEntries);
+  count += setSubmittedItemsApproved(period.receipts.filter((receipt) => getOwnerName(receipt) === employee), changedEntries);
+  count += setSubmittedItemsApproved(period.travels.filter((travel) => getOwnerName(travel) === employee), changedEntries);
+  await syncChangedEntriesToCloud(changedEntries, "En tidsrad attesterades lokalt men inte i Supabase");
+  return count;
+}
+
+async function approveSubmittedForDay(date) {
+  let count = 0;
+  const changedEntries = [];
+  count += setSubmittedItemsApproved(state.entries.filter((entry) => entry.date === date && isEntryVisible(entry)), changedEntries);
+  count += setSubmittedItemsApproved(state.receipts.filter((receipt) => receipt.date === date && isClientVisible(getClient(receipt.clientId) || {})), changedEntries);
+  count += setSubmittedItemsApproved(state.travels.filter((travel) => travel.date === date && isClientVisible(getClient(travel.clientId) || {})), changedEntries);
+  await syncChangedEntriesToCloud(changedEntries, "En tidsrad attesterades lokalt men inte i Supabase");
+  return count;
+}
+
+function submitDraftsInSelectedPeriod() {
+  if (isSelectedTimePeriodLocked()) return { count: 0, changedEntries: [] };
+  let count = 0;
+  const changedEntries = [];
+  const period = getSelectedPeriodApprovalCollections();
+  period.entries.forEach((entry) => {
+    if (!["draft", "rejected"].includes(entry.status || "draft")) return;
+    entry.status = "submitted";
+    entry.reviewNote = "";
+    changedEntries.push(entry);
+    count += 1;
+  });
+  period.receipts.forEach((receipt) => {
+    if (!["draft", "rejected"].includes(receipt.status || "draft")) return;
+    receipt.status = "submitted";
+    receipt.reviewNote = "";
+    count += 1;
+  });
+  period.travels.forEach((travel) => {
+    if (!["draft", "rejected"].includes(travel.status || "draft")) return;
+    travel.status = "submitted";
+    travel.reviewNote = "";
+    count += 1;
+  });
+  return { count, changedEntries };
+}
+
+async function submitSelectedPeriodToApproval(options = {}) {
+  const { count, changedEntries } = submitDraftsInSelectedPeriod();
+  if (!count) {
+    if (!options.silent) {
+      showToast(isSelectedTimePeriodLocked() ? "Perioden är låst." : "Det finns inga utkast att skicka i perioden.", "warning");
+    }
+    return false;
+  }
+  await syncChangedEntriesToCloud(changedEntries, "Tidsraden skickades lokalt men inte i Supabase");
+  saveState();
+  renderAll();
+  if (!options.silent) showToast(`${count} poster skickades till attest.`);
+  return true;
+}
+
+async function approveSelectedPeriod() {
+  const period = getSelectedPeriodApprovalCollections();
+  const changedEntries = [];
+  const count =
+    setSubmittedItemsApproved(period.entries, changedEntries)
+    + setSubmittedItemsApproved(period.receipts, changedEntries)
+    + setSubmittedItemsApproved(period.travels, changedEntries);
+  if (!count) return 0;
+  await syncChangedEntriesToCloud(changedEntries, "En tidsrad attesterades lokalt men inte i Supabase");
+  saveState();
+  renderAll();
+  return count;
+}
+
+function getUniqueVisibleTimeEmployees() {
+  const period = getSelectedPeriodApprovalCollections();
+  return [...new Set([
+    ...period.entries.map(getOwnerName),
+    ...period.receipts.map(getOwnerName),
+    ...period.travels.map(getOwnerName)
+  ])].filter(Boolean);
+}
+
+function setInvoiceFiltersToSelectedPeriod() {
+  const range = getSelectedPeriodRange();
+  if (els.invoiceFrom) els.invoiceFrom.value = range.from;
+  if (els.invoiceTo) els.invoiceTo.value = range.to;
+  if (els.invoiceReadinessFilter) els.invoiceReadinessFilter.value = "all";
+  els.invoiceTabs?.forEach((item) => item.classList.toggle("active", item.dataset.invoiceTab === "preliminary"));
+  els.invoiceViewModes?.forEach((item) => item.classList.toggle("active", item.dataset.invoiceViewmode === "project"));
+}
+
+function createInvoicesForSelectedPeriod() {
+  setInvoiceFiltersToSelectedPeriod();
+  const readyRows = getInvoiceRows().filter(isInvoiceRowReady);
+  const records = createInvoicesFromRows(readyRows);
+  if (!records.length) {
+    showToast("Det finns inga fakturaklara underlag i vald period.", "warning");
+    return false;
+  }
+  saveState();
+  renderAll();
+  setView("invoice");
+  openInvoiceRecordDetail(records[0].id);
+  showToast(`${records.length} fakturaunderlag skapades från vald period.`);
+  return true;
+}
+
+async function handleTimeFlowAction(action) {
+  const range = getSelectedPeriodRange();
+  if (action === "submit") {
+    await submitSelectedPeriodToApproval();
+    return;
+  }
+  if (action === "approve-period") {
+    const count = await approveSelectedPeriod();
+    if (!count) {
+      showToast("Det finns inga inskickade poster att attestera i perioden.", "warning");
+      return;
+    }
+    showToast(`${count} poster attesterades för perioden.`);
+    return;
+  }
+  if (action === "complete-period") {
+    await submitSelectedPeriodToApproval({ silent: true });
+    const count = await approveSelectedPeriod();
+    if (!count) {
+      showToast("Perioden saknar poster som kan skickas eller attesteras.", "warning");
+      return;
+    }
+    showToast(`${count} poster är klara för fakturering.`);
+    return;
+  }
+  if (action === "create-invoices") {
+    createInvoicesForSelectedPeriod();
+    return;
+  }
+  if (action === "approval") {
+    if (els.approvalSearch) els.approvalSearch.value = selectedTimeEmployee || "";
+    if (els.approvalKindFilter) els.approvalKindFilter.value = "all";
+    if (els.approvalStatusFilter) els.approvalStatusFilter.value = "open";
+    if (els.approvalFrom) els.approvalFrom.value = range.from;
+    if (els.approvalTo) els.approvalTo.value = range.to;
+    if (els.approvalActionableOnly) els.approvalActionableOnly.checked = false;
+    setView("reports");
+    renderApprovalFlow();
+    scrollToPageTarget("approval-list");
+    showToast("Öppnade attestflödet för vald period.");
+    return;
+  }
+  if (action === "invoice") {
+    setInvoiceFiltersToSelectedPeriod();
+    setView("invoice");
+    renderInvoiceWorkbench();
+    showToast("Faktureringen visar samma period som tidsrapporteringen.");
+    return;
+  }
+  if (action === "payroll") {
+    setView("reports");
+    selectedReportId = "payroll";
+    renderReports();
+    showToast("Öppnade löneunderlag för kontroll.");
+    return;
+  }
+  selectedTimeAnchorDate = range.from || isoToday;
+  if (els.entryDate) els.entryDate.value = selectedTimeAnchorDate;
+  focusElement(els.entryClient);
+  showToast("Ny tidsrad är förberedd.");
+}
+
+function toggleSelectedTimePeriodLock() {
+  const key = getSelectedTimePeriodKey();
+  state.timeLocks = state.timeLocks || [];
+  const existingIndex = state.timeLocks.findIndex((lock) => lock.key === key);
+  if (existingIndex >= 0) {
+    state.timeLocks.splice(existingIndex, 1);
+    return false;
+  }
+  state.timeLocks.push({
+    key,
+    label: getTimePeriodLabel(),
+    mode: selectedTimePeriodMode,
+    lockedAt: isoToday,
+    lockedBy: getCurrentUser().name
+  });
+  return true;
+}
+
+els.timePrevPeriod?.addEventListener("click", () => {
+  setTimePeriodAnchorByDelta(-1);
+  showToast(`Visar ${getTimePeriodLabel()}.`);
+});
+
+els.timeTodayPeriod?.addEventListener("click", () => {
+  selectedTimeAnchorDate = isoToday;
+  if (els.entryDate) els.entryDate.value = isoToday;
+  renderTimePeriodOverview();
+  renderEntriesTable();
+  showToast(`Tillbaka till ${getTimePeriodLabel()}.`);
+});
+
+els.timeNextPeriod?.addEventListener("click", () => {
+  setTimePeriodAnchorByDelta(1);
+  showToast(`Visar ${getTimePeriodLabel()}.`);
+});
+
+els.timeSubmitPeriod?.addEventListener("click", async () => {
+  await submitSelectedPeriodToApproval();
+});
+
+els.timeLockPeriod?.addEventListener("click", () => {
+  const locked = toggleSelectedTimePeriodLock();
+  saveState();
+  renderAll();
+  showToast(locked ? `${getTimePeriodLabel()} låstes.` : `${getTimePeriodLabel()} låstes upp.`);
+});
+
 els.timePeriodBoard?.addEventListener("click", async (event) => {
   const employeeButton = event.target.closest("[data-time-employee]");
   const approveButton = event.target.closest("[data-time-approve-employee]");
@@ -6989,23 +9922,50 @@ els.timePeriodBoard?.addEventListener("click", async (event) => {
   }
 });
 
+els.monthDayBoard?.addEventListener("click", async (event) => {
+  const newButton = event.target.closest("[data-time-day-new]");
+  const approveButton = event.target.closest("[data-time-day-approve]");
+
+  if (newButton) {
+    const date = newButton.dataset.timeDayNew;
+    selectedTimeAnchorDate = date;
+    if (els.entryDate) els.entryDate.value = date;
+    setTimePeriodMode("day", date);
+    focusElement(els.entryClient);
+    showToast(`Ny tidsrad för ${date} är förberedd.`);
+    return;
+  }
+
+  if (approveButton) {
+    const count = await approveSubmittedForDay(approveButton.dataset.timeDayApprove);
+    if (!count) {
+      showToast("Det finns inget inskickat att attestera den dagen.", "warning");
+      return;
+    }
+    saveState();
+    renderAll();
+    showToast(`${count} tidsrader attesterades för dagen.`);
+  }
+});
+
+els.monthRegisterAside?.addEventListener("click", (event) => {
+  const flowButton = event.target.closest("[data-time-flow-action]");
+  if (!flowButton) return;
+  handleTimeFlowAction(flowButton.dataset.timeFlowAction);
+});
+
 els.timeExpandBlocks?.addEventListener("click", () => {
   els.timePeriodBoard?.classList.toggle("expanded");
+  renderTimePeriodOverview();
   showToast(els.timePeriodBoard?.classList.contains("expanded") ? "Alla tidsblock expanderades." : "Tidsblocken komprimerades.");
 });
 
 els.timeAttestMonth?.addEventListener("click", async () => {
-  const employees = [...new Set(state.entries.filter(isEntryVisible).map((entry) => entry.employee || getCurrentUser().name))];
-  let count = 0;
-  for (const employee of employees) {
-    count += await approveSubmittedForEmployee(employee);
-  }
+  const count = await approveSelectedPeriod();
   if (!count) {
     showToast("Det finns inga inskickade poster att attestera i perioden.", "warning");
     return;
   }
-  saveState();
-  renderAll();
   showToast(`${count} poster attesterades för perioden.`);
 });
 
@@ -7017,6 +9977,80 @@ els.invoiceCommandStrip?.addEventListener("click", (event) => {
   if (command === "history") {
     els.invoiceHistoryTable?.scrollIntoView({ behavior: "smooth", block: "start" });
     showToast("Fakturaunderlag och arkiv visas längre ned.");
+    return;
+  }
+
+  if (command === "open-latest") {
+    const latestInvoice = getSortedInvoices()[0];
+    if (!latestInvoice) {
+      showToast("Det finns ingen skapad faktura ännu.", "warning");
+      return;
+    }
+    openInvoiceRecordDetail(latestInvoice.id);
+    showToast(`Öppnade ${latestInvoice.number}.`);
+    return;
+  }
+
+  if (command === "share-created") {
+    const invoices = (state.invoices || []).filter((invoice) => getEffectiveInvoiceStatus(invoice) === "created");
+    const shared = invoices.reduce((count, invoice) => shareInvoiceToPortal(invoice.id, { navigate: false, toast: false }) ? count + 1 : count, 0);
+    if (!shared) {
+      showToast("Det finns inga skapade fakturor att dela just nu.", "warning");
+      return;
+    }
+    if (els.invoiceHistoryStatus) els.invoiceHistoryStatus.value = "sent";
+    renderAll();
+    els.invoiceHistoryTable?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast(`${shared} fakturor delades till kundportalen.`);
+    return;
+  }
+
+  if (command === "open-customer" || command === "open-changes" || command === "open-approved" || command === "open-overdue" || command === "open-payment") {
+    const statusMap = {
+      "open-customer": "sent",
+      "open-overdue": "overdue",
+      "open-changes": "changeRequested",
+      "open-approved": "customerApproved",
+      "open-payment": "customerApproved"
+    };
+    if (els.invoiceHistoryStatus) els.invoiceHistoryStatus.value = statusMap[command];
+    renderInvoiceHistory();
+    els.invoiceHistoryTable?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast(`Visar ${button.querySelector("span")?.textContent?.trim().toLowerCase() || "fakturor"} i fakturahistoriken.`);
+    return;
+  }
+
+  if (command === "portal-invoices") {
+    const targetInvoice = (state.invoices || []).find((invoice) => ["sent", "overdue", "changeRequested", "customerApproved"].includes(getEffectiveInvoiceStatus(invoice)));
+    if (!targetInvoice) {
+      showToast("Det finns inga fakturor i kundportalflödet just nu.", "warning");
+      return;
+    }
+    if (els.portalClient) els.portalClient.value = targetInvoice.clientId;
+    setView("portal");
+    renderPortal();
+    showToast("Öppnade kundens portalflöde för fakturor.");
+    return;
+  }
+
+  if (command === "mark-approved-paid") {
+    const approvedInvoices = (state.invoices || []).filter((invoice) => getEffectiveInvoiceStatus(invoice) === "customerApproved");
+    if (!approvedInvoices.length) {
+      showToast("Det finns inga kundgodkända fakturor att markera som betalda.", "warning");
+      return;
+    }
+    approvedInvoices.forEach((invoice) => {
+      invoice.status = "paid";
+      invoice.paidAt = invoice.paidAt || isoToday;
+      addInvoiceEvent(invoice, "Markerad betald", "Massåtgärd från faktureringen.");
+      syncInvoicePortalTask(invoice, "paid");
+    });
+    saveState();
+    renderAll();
+    if (els.invoiceHistoryStatus) els.invoiceHistoryStatus.value = "paid";
+    renderInvoiceHistory();
+    els.invoiceHistoryTable?.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast(`${approvedInvoices.length} kundgodkända fakturor markerades som betalda.`);
     return;
   }
 
@@ -7053,20 +10087,42 @@ els.invoiceCommandStrip?.addEventListener("click", (event) => {
     return;
   }
 
+  if (command === "draft-visible") {
+    const created = saveInvoiceDraftsFromRows(getInvoiceRows());
+    if (!created) {
+      showToast("Det finns inga synliga underlag att spara som utkast.", "warning");
+      return;
+    }
+    els.invoiceTabs.forEach((item) => item.classList.toggle("active", item.dataset.invoiceTab === "draft"));
+    saveState();
+    renderAll();
+    showToast(`${created} synliga underlag sparades som utkast.`);
+    return;
+  }
+
+  if (command === "approve-blocked") {
+    const count = approveInvoiceBlockedFromRows(getInvoiceRows().filter((row) => row.warning > 0));
+    if (!count) {
+      showToast("Det finns inga synliga spärrar att attestera.", "warning");
+      return;
+    }
+    saveState();
+    renderAll();
+    showToast(`${count} blockerande rader attesterades.`);
+    return;
+  }
+
   if (command === "create-ready") {
     const rows = getInvoiceRows().filter(isInvoiceRowReady);
-    const projectIds = [...new Set(rows.flatMap((row) => row.sourceProjectIds || [row.id]))];
-    const created = projectIds.reduce((count, projectId) => {
-      const record = createInvoiceFromProject(projectId);
-      return record ? count + 1 : count;
-    }, 0);
-    if (!created) {
+    const records = createInvoicesFromRows(rows);
+    if (!records.length) {
       showToast("Det finns inga helt klara underlag att skapa just nu.", "warning");
       return;
     }
     saveState();
     renderAll();
-    showToast(`${created} fakturaunderlag skapades.`);
+    openInvoiceRecordDetail(records[0].id);
+    showToast(`${records.length} fakturaunderlag skapades. Första fakturan öppnades.`);
   }
 });
 
@@ -7085,15 +10141,31 @@ els.reportTags?.addEventListener("click", (event) => {
 });
 
 els.reportCatalog?.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-report-open]");
+  const button = event.target.closest("[data-report-select]");
   if (!button) return;
-  setView(button.dataset.reportOpen);
+  selectedReportId = button.dataset.reportSelect;
+  renderReportCatalog();
+  renderReportDetail();
   showToast("Rapportens arbetsvy öppnades.");
+});
+
+els.reportDetailActions?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-report-action]");
+  if (!button) return;
+  handleReportAction(button.dataset.reportAction);
+});
+
+els.reportResultList?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-report-row-index]");
+  if (!button) return;
+  const rows = getReportRows(selectedReportId);
+  openReportRow(rows[Number(button.dataset.reportRowIndex)]);
 });
 
 els.shortcuts.forEach((button) => {
   button.addEventListener("click", () => {
     setView(button.dataset.viewShortcut);
+    scrollToPageTarget(button.dataset.scrollTarget);
     showToast(`Öppnade ${viewTitles[button.dataset.viewShortcut].toLowerCase()}.`);
   });
 });
@@ -7117,17 +10189,6 @@ els.trialLink?.addEventListener("click", (event) => {
   event.preventDefault();
   openDrawer("cloud");
   showToast("Öppnade konto och molninloggning.");
-});
-
-els.topActions.forEach((button) => {
-  button.addEventListener("click", () => {
-    const action = button.dataset.topAction;
-    if (action === "timer") {
-      openTimerWithContext();
-      return;
-    }
-    openDrawer(action);
-  });
 });
 
 els.roleSwitcher?.addEventListener("change", () => {
@@ -7185,6 +10246,17 @@ els.agreementNewButton?.addEventListener("click", () => {
 });
 
 document.addEventListener("click", (event) => {
+  const topActionButton = event.target.closest("[data-top-action]");
+  if (topActionButton) {
+    const action = topActionButton.dataset.topAction;
+    if (action === "timer") {
+      openTimerWithContext();
+      return;
+    }
+    openDrawer(action);
+    return;
+  }
+
   const closeButton = event.target.closest("[data-drawer-close]");
   if (closeButton) {
     closeDrawer();
@@ -7195,6 +10267,24 @@ document.addEventListener("click", (event) => {
   if (drawerViewButton) {
     setView(drawerViewButton.dataset.drawerView);
     closeDrawer();
+    return;
+  }
+
+  const drawerOpenButton = event.target.closest("[data-drawer-open]");
+  if (drawerOpenButton) {
+    openDrawer(drawerOpenButton.dataset.drawerOpen);
+    return;
+  }
+
+  const drawerCommandButton = event.target.closest("[data-drawer-command]");
+  if (drawerCommandButton) {
+    handleDrawerCommand(drawerCommandButton.dataset.drawerCommand);
+    return;
+  }
+
+  const drawerApprovalButton = event.target.closest("[data-approval-action]");
+  if (drawerApprovalButton && els.drawer.contains(drawerApprovalButton)) {
+    handleApprovalAction(drawerApprovalButton.dataset.approvalAction, drawerApprovalButton.dataset.approvalKind, drawerApprovalButton.dataset.approvalId);
     return;
   }
 
@@ -7407,6 +10497,19 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const drawerInvoiceOpenApproval = event.target.closest("[data-invoice-open-approval]");
+  if (drawerInvoiceOpenApproval && els.drawer.contains(drawerInvoiceOpenApproval)) {
+    if (els.approvalProjectFilter) els.approvalProjectFilter.value = drawerInvoiceOpenApproval.dataset.invoiceOpenApproval;
+    if (els.approvalKindFilter) els.approvalKindFilter.value = "all";
+    if (els.approvalStatusFilter) els.approvalStatusFilter.value = "open";
+    if (els.approvalSearch) els.approvalSearch.value = "";
+    closeDrawer();
+    setView("reports");
+    renderApprovalFlow();
+    showToast("Öppnade attestflödet för fakturaunderlaget.");
+    return;
+  }
+
   const drawerInvoiceCreate = event.target.closest("[data-invoice-create]");
   if (drawerInvoiceCreate && els.drawer.contains(drawerInvoiceCreate)) {
     const record = createInvoiceFromProject(drawerInvoiceCreate.dataset.invoiceCreate);
@@ -7432,10 +10535,23 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const drawerInvoiceSharePortal = event.target.closest("[data-invoice-share-portal]");
+  if (drawerInvoiceSharePortal && els.drawer.contains(drawerInvoiceSharePortal)) {
+    shareInvoiceToPortal(drawerInvoiceSharePortal.dataset.invoiceSharePortal);
+    return;
+  }
+
   const drawerInvoiceStatus = event.target.closest("[data-invoice-status]");
   if (drawerInvoiceStatus && els.drawer.contains(drawerInvoiceStatus)) {
     const status = drawerInvoiceStatus.dataset.invoiceStatus;
     if (status === "credited" && !window.confirm("Vill du markera fakturan som krediterad?")) return;
+    const invoice = (state.invoices || []).find((item) => item.id === drawerInvoiceStatus.dataset.invoiceId);
+    if (status === "changeRequested" && invoice) {
+      const message = window.prompt("Vad behöver ändras på fakturan?", invoice.changeRequestMessage || "Kunden vill justera underlaget.");
+      if (message === null) return;
+      invoice.changeRequestMessage = message.trim() || "Kunden vill justera underlaget.";
+      invoice.changeRequestedBy = getCurrentUser().name;
+    }
     if (setInvoiceStatus(drawerInvoiceStatus.dataset.invoiceId, status)) {
       saveState();
       renderAll();
@@ -7467,7 +10583,9 @@ document.addEventListener("click", (event) => {
   if (cloudActionButton && els.drawer.contains(cloudActionButton)) {
     const action = cloudActionButton.dataset.cloudAction;
     if (action === "refresh") {
-      refreshCloudSession().then(() => openDrawer("cloud"));
+      checkCloudConnection({ silent: false })
+        .then(() => refreshCloudSession())
+        .then(() => openDrawer("cloud"));
     }
     if (action === "signout") {
       cloudSignOut().then(() => openDrawer("cloud"));
@@ -7597,6 +10715,20 @@ document.addEventListener("submit", async (event) => {
     return;
   }
 
+  const invoiceSettingsForm = event.target.closest("[data-invoice-settings-form]");
+  if (invoiceSettingsForm) {
+    event.preventDefault();
+    updateInvoiceSettings(invoiceSettingsForm);
+    return;
+  }
+
+  const storedInvoiceSettingsForm = event.target.closest("[data-stored-invoice-settings-form]");
+  if (storedInvoiceSettingsForm) {
+    event.preventDefault();
+    updateStoredInvoiceSettings(storedInvoiceSettingsForm);
+    return;
+  }
+
   const editForm = event.target.closest("[data-edit-form]");
   if (editForm) {
     event.preventDefault();
@@ -7610,14 +10742,19 @@ document.addEventListener("submit", async (event) => {
     companyName: document.querySelector("#settings-company").value.trim() || defaultState.settings.companyName,
     adminEmail: document.querySelector("#settings-email").value.trim() || defaultState.settings.adminEmail,
     defaultRate: Number(document.querySelector("#settings-rate").value || 0),
+    workdayHours: Math.max(0, normalizeNumber(document.querySelector("#settings-workday-hours").value, 8)),
     approvalMode: document.querySelector("#settings-approval").value,
     weekLockDay: document.querySelector("#settings-lock-day").value.trim() || "Fredag",
+    defaultDueDays: Math.max(1, Number(document.querySelector("#settings-default-due-days").value || 7)),
     invoicePrefix: document.querySelector("#settings-invoice-prefix").value.trim() || "F",
     nextInvoiceNumber: Math.max(1, Number(document.querySelector("#settings-next-invoice").value || 1)),
     paymentTerms: Math.max(0, Number(document.querySelector("#settings-payment-terms").value || 10)),
     vatRate: Math.max(0, normalizeNumber(document.querySelector("#settings-vat-rate").value, 25)),
+    invoiceReminderDays: Math.max(1, Number(document.querySelector("#settings-invoice-reminder-days").value || 5)),
     bankgiro: document.querySelector("#settings-bankgiro").value.trim(),
-    invoiceFooter: document.querySelector("#settings-invoice-footer").value.trim()
+    invoiceFooter: document.querySelector("#settings-invoice-footer").value.trim(),
+    portalAutoNotify: document.querySelector("#settings-portal-auto-notify").checked,
+    customerApprovalRequired: document.querySelector("#settings-customer-approval-required").checked
   };
   saveState();
   renderBranding();
@@ -7641,7 +10778,7 @@ els.esignOwner.value = getCurrentUser().name;
 
 els.entryForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await addEntry({
+  const row = await addEntry({
     date: els.entryDate.value,
     employee: els.entryEmployee.value.trim(),
     type: els.entryType.value,
@@ -7655,6 +10792,7 @@ els.entryForm.addEventListener("submit", async (event) => {
     status: els.entryStatus.value,
     description: els.entryDescription.value.trim()
   });
+  if (!row) return;
   els.entryWorkOrder.value = "";
   els.entryDescription.value = "";
   els.entryHours.value = "1.0";
@@ -7953,16 +11091,7 @@ els.projectGrid.addEventListener("click", async (event) => {
   const editButton = event.target.closest("[data-edit-project]");
   const deleteButton = event.target.closest("[data-delete-project]");
   if (startTimerButton) {
-    const project = getProject(startTimerButton.dataset.startProjectTimer);
-    if (project) {
-      openTimerWithContext({
-        clientId: project.clientId,
-        projectId: project.id,
-        workOrder: project.name,
-        task: "Bokföring",
-        description: project.description || ""
-      });
-    }
+    handleProjectAction("start-timer", startTimerButton.dataset.startProjectTimer);
     return;
   }
   if (openButton) {
@@ -7998,20 +11127,16 @@ els.projectGrid.addEventListener("click", async (event) => {
 
 els.projectDetail?.addEventListener("click", (event) => {
   const startTimerButton = event.target.closest("[data-start-project-timer]");
+  const projectActionButton = event.target.closest("[data-project-action]");
   const editProject = event.target.closest("[data-edit-project]");
   const editEntry = event.target.closest("[data-edit-entry]");
   const editReceipt = event.target.closest("[data-edit-receipt]");
+  if (projectActionButton) {
+    handleProjectAction(projectActionButton.dataset.projectAction, projectActionButton.dataset.projectId);
+    return;
+  }
   if (startTimerButton) {
-    const project = getProject(startTimerButton.dataset.startProjectTimer);
-    if (project) {
-      openTimerWithContext({
-        clientId: project.clientId,
-        projectId: project.id,
-        workOrder: project.name,
-        task: "Bokföring",
-        description: project.description || ""
-      });
-    }
+    handleProjectAction("start-timer", startTimerButton.dataset.startProjectTimer);
     return;
   }
   if (editProject) {
@@ -8146,11 +11271,53 @@ els.approvalList.addEventListener("click", async (event) => {
   await handleApprovalAction(button.dataset.approvalAction, button.dataset.approvalKind, button.dataset.approvalId);
 });
 
+els.approvalGroupSummary?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-approval-kind-shortcut]");
+  if (!button) return;
+  if (els.approvalKindFilter) els.approvalKindFilter.value = button.dataset.approvalKindShortcut;
+  renderApprovalFlow();
+  showToast(`Visar ${getApprovalKindLabel(button.dataset.approvalKindShortcut).toLowerCase()} i attestflödet.`);
+});
+
+els.approvalSummary?.addEventListener("click", (event) => {
+  const statusButton = event.target.closest("[data-approval-summary-filter]");
+  if (statusButton && els.approvalStatusFilter) {
+    els.approvalStatusFilter.value = statusButton.dataset.approvalSummaryFilter;
+    if (els.approvalActionableOnly) els.approvalActionableOnly.checked = false;
+    renderApprovalFlow();
+    showToast("Attestflödet filtrerades.");
+    return;
+  }
+
+  const actionableButton = event.target.closest("[data-approval-actionable-shortcut]");
+  if (!actionableButton || !els.approvalActionableOnly) return;
+  els.approvalActionableOnly.checked = true;
+  renderApprovalFlow();
+  showToast("Visar poster som kan hanteras.");
+});
+
 ["input", "change"].forEach((eventName) => {
   els.approvalSearch?.addEventListener(eventName, renderApprovalFlow);
 });
+els.approvalOwnerFilter?.addEventListener("change", renderApprovalFlow);
+els.approvalProjectFilter?.addEventListener("change", renderApprovalFlow);
 els.approvalKindFilter?.addEventListener("change", renderApprovalFlow);
 els.approvalStatusFilter?.addEventListener("change", renderApprovalFlow);
+els.approvalFrom?.addEventListener("change", renderApprovalFlow);
+els.approvalTo?.addEventListener("change", renderApprovalFlow);
+els.approvalActionableOnly?.addEventListener("change", renderApprovalFlow);
+els.approvalResetFilters?.addEventListener("click", () => {
+  if (els.approvalSearch) els.approvalSearch.value = "";
+  if (els.approvalOwnerFilter) els.approvalOwnerFilter.value = "all";
+  if (els.approvalProjectFilter) els.approvalProjectFilter.value = "all";
+  if (els.approvalKindFilter) els.approvalKindFilter.value = "all";
+  if (els.approvalStatusFilter) els.approvalStatusFilter.value = "open";
+  if (els.approvalFrom) els.approvalFrom.value = "";
+  if (els.approvalTo) els.approvalTo.value = "";
+  if (els.approvalActionableOnly) els.approvalActionableOnly.checked = false;
+  renderApprovalFlow();
+  showToast("Attestfiltren rensades.");
+});
 
 els.receiptSearch?.addEventListener("input", renderReceipts);
 els.receiptStatusFilter?.addEventListener("change", renderReceipts);
@@ -8322,6 +11489,20 @@ els.periodModes.forEach((button) => {
 
 els.filterClient.addEventListener("change", renderEntriesTable);
 els.filterStatus.addEventListener("change", renderEntriesTable);
+els.timeStatusSummary?.addEventListener("click", (event) => {
+  const flowButton = event.target.closest("[data-time-flow-action]");
+  if (flowButton) {
+    handleTimeFlowAction(flowButton.dataset.timeFlowAction);
+    return;
+  }
+
+  const button = event.target.closest("[data-time-status-filter]");
+  if (!button || !els.filterStatus) return;
+  els.filterStatus.value = button.dataset.timeStatusFilter;
+  renderEntriesTable();
+  els.entriesTable?.scrollIntoView({ behavior: "smooth", block: "start" });
+  showToast(`Tidsrader filtreras: ${button.textContent.trim().toLowerCase()}.`);
+});
 els.agreementSearch.addEventListener("input", renderAgreements);
 els.agreementStatusFilter.addEventListener("change", renderAgreements);
 els.agreementClient.addEventListener("change", () => {
@@ -8448,12 +11629,34 @@ els.esignAgreement.addEventListener("change", () => {
 });
 els.portalClient?.addEventListener("change", renderPortal);
 els.portalNewTask?.addEventListener("click", createPortalTaskForCurrentClient);
+els.portalSummary?.addEventListener("click", (event) => {
+  const focusButton = event.target.closest("[data-portal-focus]");
+  if (focusButton) {
+    handlePortalFocus(focusButton.dataset.portalFocus);
+    return;
+  }
+});
 els.portalTaskList?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-portal-task-action]");
   if (!button) return;
   handlePortalTaskAction(button.dataset.portalTaskAction, button.dataset.portalTaskId);
 });
 els.portalInvoices?.addEventListener("click", (event) => {
+  const documentButton = event.target.closest("[data-open-document]");
+  if (documentButton) {
+    openStoredDocument(documentButton.dataset.openDocument, documentButton.dataset.documentId);
+    return;
+  }
+  const detailButton = event.target.closest("[data-invoice-detail]");
+  if (detailButton) {
+    openInvoiceRecordDetail(detailButton.dataset.invoiceDetail);
+    return;
+  }
+  const shareButton = event.target.closest("[data-invoice-share-portal]");
+  if (shareButton) {
+    shareInvoiceToPortal(shareButton.dataset.invoiceSharePortal);
+    return;
+  }
   const button = event.target.closest("[data-portal-invoice-action]");
   if (!button) return;
   handlePortalInvoiceAction(button.dataset.portalInvoiceAction, button.dataset.portalInvoiceId);
@@ -8463,12 +11666,97 @@ els.portalTemplates?.addEventListener("click", (event) => {
   if (!button) return;
   createPortalTaskFromTemplate(button.dataset.portalTemplate);
 });
+els.collaborationCopyLink?.addEventListener("click", async () => {
+  const url = `${location.origin}${location.pathname}#collaboration`;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast("LÃ¤nk till samarbetsytan kopierades.");
+  } catch {
+    showToast(`SamarbetslÃ¤nk: ${url}`);
+  }
+});
+els.collaborationNewThread?.addEventListener("click", () => {
+  if (!els.portalClient?.value && state.clients[0]) els.portalClient.value = state.clients[0].id;
+  createPortalTaskForCurrentClient();
+  renderCollaboration();
+});
+els.collaborationFeed?.addEventListener("click", (event) => {
+  const portalButton = event.target.closest("[data-collab-portal]");
+  if (portalButton) {
+    if (els.portalClient) els.portalClient.value = portalButton.dataset.collabPortal;
+    setView("portal");
+    renderPortal();
+    showToast("Ã–ppnade kundens portalflÃ¶de.");
+    return;
+  }
+  const clientButton = event.target.closest("[data-collab-client]");
+  if (clientButton) {
+    selectedClientId = clientButton.dataset.collabClient;
+    setView("clients");
+    renderClients();
+    showToast("Ã–ppnade kundkort frÃ¥n Samarbete.");
+  }
+});
+els.collaborationPermissions?.addEventListener("click", (event) => {
+  const portalButton = event.target.closest("[data-collab-portal]");
+  if (!portalButton) return;
+  if (els.portalClient) els.portalClient.value = portalButton.dataset.collabPortal;
+  setView("portal");
+  renderPortal();
+  showToast("Ã–ppnade portal och behÃ¶righeter fÃ¶r kunden.");
+});
+els.versionsApplyRecommended?.addEventListener("click", () => {
+  setView("invoice");
+  showToast("Rekommenderad nÃ¤sta version Ã¤r fakturaflÃ¶det.");
+});
+els.versionGrid?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-version-activate]");
+  if (!button) return;
+  setView(button.dataset.versionActivate);
+  showToast("Versionen visas i prototypen.");
+});
 els.invoiceSearch.addEventListener("input", renderInvoiceWorkbench);
+els.invoiceReadinessFilter?.addEventListener("change", () => {
+  renderInvoiceWorkbench();
+  showToast(`Visar ${els.invoiceReadinessFilter.selectedOptions[0]?.textContent.toLowerCase() || "valda underlag"}.`);
+});
 els.invoiceFrom.addEventListener("change", renderInvoiceWorkbench);
 els.invoiceTo.addEventListener("change", renderInvoiceWorkbench);
 els.invoiceFilterButton?.addEventListener("click", () => {
   renderInvoiceWorkbench();
   showToast("Fakturaunderlaget filtrerades.");
+});
+els.invoiceResetFilter?.addEventListener("click", () => {
+  if (els.invoiceSearch) els.invoiceSearch.value = "";
+  if (els.invoiceReadinessFilter) els.invoiceReadinessFilter.value = "all";
+  if (els.invoiceFrom) els.invoiceFrom.value = getMonthStart(isoToday);
+  if (els.invoiceTo) els.invoiceTo.value = isoToday;
+  renderInvoiceWorkbench();
+  showToast("Fakturafiltren rensades.");
+});
+els.invoiceStatusSummary?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-invoice-summary-filter]");
+  if (!button || !els.invoiceReadinessFilter) return;
+  els.invoiceReadinessFilter.value = button.dataset.invoiceSummaryFilter;
+  renderInvoiceWorkbench();
+  showToast(`Visar ${button.textContent.trim().toLowerCase()}.`);
+});
+els.invoiceHistorySearch?.addEventListener("input", renderInvoiceHistory);
+els.invoiceHistoryStatus?.addEventListener("change", renderInvoiceHistory);
+els.invoiceHistoryClient?.addEventListener("change", renderInvoiceHistory);
+els.invoiceHistoryReset?.addEventListener("click", () => {
+  if (els.invoiceHistorySearch) els.invoiceHistorySearch.value = "";
+  if (els.invoiceHistoryStatus) els.invoiceHistoryStatus.value = "all";
+  if (els.invoiceHistoryClient) els.invoiceHistoryClient.value = "all";
+  renderInvoiceHistory();
+  showToast("Fakturahistorikens filter rensades.");
+});
+els.invoiceHistorySummary?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-invoice-history-status]");
+  if (!button || !els.invoiceHistoryStatus) return;
+  els.invoiceHistoryStatus.value = button.dataset.invoiceHistoryStatus;
+  renderInvoiceHistory();
+  showToast(`Visar ${button.textContent.trim().toLowerCase()} i fakturahistoriken.`);
 });
 els.invoiceTabs.forEach((button) => {
   button.addEventListener("click", () => {
@@ -8492,12 +11780,27 @@ els.invoiceTable.addEventListener("click", (event) => {
   const downloadButton = event.target.closest("[data-invoice-download]");
   const draftButton = event.target.closest("[data-invoice-draft]");
   const createButton = event.target.closest("[data-invoice-create]");
+  const approvalButton = event.target.closest("[data-invoice-row-approval]");
+
+  if (approvalButton) {
+    if (els.approvalProjectFilter) els.approvalProjectFilter.value = approvalButton.dataset.invoiceRowApproval;
+    if (els.approvalStatusFilter) els.approvalStatusFilter.value = "open";
+    if (els.approvalKindFilter) els.approvalKindFilter.value = "all";
+    if (els.approvalSearch) els.approvalSearch.value = "";
+    setView("reports");
+    renderApprovalFlow();
+    showToast("Öppnade attestflödet för fakturaraden.");
+    return;
+  }
 
   if (openLink) {
     event.preventDefault();
-    const project = state.projects.find((item) => item.id === openLink.dataset.invoiceOpen);
-    if (project) {
-      openInvoiceDetail(project.id);
+    const invoiceOpenId = openLink.dataset.invoiceOpen;
+    const project = state.projects.find((item) => item.id === invoiceOpenId);
+    const row = getInvoiceRows().find((item) => item.id === invoiceOpenId);
+    const groupedProjectId = row?.sourceProjectIds?.[0];
+    if (project || groupedProjectId) {
+      openInvoiceDetail(project?.id || groupedProjectId);
     } else {
       showToast("Den grupperade raden kan inte öppnas som ett enskilt projekt.", "warning");
     }
@@ -8523,7 +11826,11 @@ els.invoiceTable.addEventListener("click", (event) => {
   if (createButton) {
     const record = createInvoiceFromProject(createButton.dataset.invoiceCreate);
     if (record) {
-      showToast("Fakturaunderlag skapades och attesterade poster markerades som fakturerade.");
+      saveState();
+      renderAll();
+      openInvoiceRecordDetail(record.id);
+      showToast("Fakturaunderlag skapades och fakturakortet öppnades.");
+      return;
     } else {
       showToast("Det finns inget att fakturera på underlaget.", "warning");
     }
@@ -8536,11 +11843,35 @@ els.invoiceTable.addEventListener("click", (event) => {
 });
 
 els.invoiceHistoryTable?.addEventListener("click", (event) => {
+  const emptyActionButton = event.target.closest("[data-invoice-empty-action]");
+  if (emptyActionButton) {
+    event.preventDefault();
+    if (emptyActionButton.dataset.invoiceEmptyAction === "show-all") {
+      if (els.invoiceHistoryStatus) els.invoiceHistoryStatus.value = "all";
+      if (els.invoiceHistorySearch) els.invoiceHistorySearch.value = "";
+      if (els.invoiceHistoryClient) els.invoiceHistoryClient.value = "all";
+      renderInvoiceHistory();
+      showToast("Visar alla fakturor i historiken.");
+      return;
+    }
+    const records = createInvoicesFromRows(getInvoiceRows().filter(isInvoiceRowReady));
+    if (!records.length) {
+      showToast("Det finns inga klara underlag att skapa faktura från.", "warning");
+      return;
+    }
+    saveState();
+    renderAll();
+    openInvoiceRecordDetail(records[0].id);
+    showToast(`${records.length} faktura${records.length === 1 ? "" : "or"} skapades.`);
+    return;
+  }
+
   const documentButton = event.target.closest("[data-open-document]");
   const statusButton = event.target.closest("[data-invoice-status]");
   const reopenButton = event.target.closest("[data-invoice-reopen]");
   const detailButton = event.target.closest("[data-invoice-detail]");
   const emailButton = event.target.closest("[data-invoice-email]");
+  const sharePortalButton = event.target.closest("[data-invoice-share-portal]");
   const storedDownloadButton = event.target.closest("[data-invoice-stored-download]");
 
   if (detailButton) {
@@ -8571,6 +11902,12 @@ els.invoiceHistoryTable?.addEventListener("click", (event) => {
     return;
   }
 
+  if (sharePortalButton) {
+    event.preventDefault();
+    shareInvoiceToPortal(sharePortalButton.dataset.invoiceSharePortal);
+    return;
+  }
+
   if (statusButton) {
     if (statusButton.dataset.invoiceStatus === "credited" && !window.confirm("Vill du markera fakturan som krediterad?")) return;
     if (setInvoiceStatus(statusButton.dataset.invoiceId, statusButton.dataset.invoiceStatus)) {
@@ -8592,13 +11929,44 @@ els.invoiceHistoryTable?.addEventListener("click", (event) => {
 });
 els.entryType.addEventListener("change", syncEntryTypeControls);
 els.timerType.addEventListener("change", syncTimerTypeControls);
+els.timerProject?.addEventListener("change", () => {
+  syncClientFromProject(els.timerProject, els.timerClient);
+  renderTimerLiveMeta();
+});
+els.entryProject?.addEventListener("change", () => syncClientFromProject(els.entryProject, els.entryClient));
+els.receiptProject?.addEventListener("change", () => syncClientFromProject(els.receiptProject, els.receiptClient));
+["change", "input"].forEach((eventName) => {
+  [els.timerType, els.timerClient, els.timerProject, els.timerWorkOrder, els.timerTask, els.timerDescription].forEach((field) => {
+    field?.addEventListener(eventName, () => {
+      if (!timer.running && !timer.elapsedSeconds) renderTimerLiveMeta();
+    });
+  });
+});
 els.startTimer.addEventListener("click", startTimer);
+els.pauseTimer?.addEventListener("click", pauseTimer);
 els.stopTimer.addEventListener("click", stopTimer);
 els.copyLastEntry?.addEventListener("click", copyPreviousEntryToForm);
 els.exportCsv.addEventListener("click", exportCsv);
+window.addEventListener("hashchange", () => {
+  const hashView = getViewFromHash();
+  if (hashView) setView(hashView);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && els.drawer?.classList.contains("open")) {
+    closeDrawer();
+    return;
+  }
+  const isSearchShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k";
+  if (isSearchShortcut) {
+    event.preventDefault();
+    focusElement(els.globalSearch);
+    showToast("Snabbsök är aktivt.");
+  }
+});
 
 syncEntryTypeControls();
 syncTimerTypeControls();
 renderAll();
 updateTimerDisplay();
+setView(getViewFromHash() || getDefaultViewForCurrentUser());
 refreshCloudSession();

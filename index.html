@@ -4,26 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Novadex Tid &amp; Löner</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="styles.css?v=20260619-time-invoice-flow">
 </head>
 <body>
   <header class="product-topbar">
     <div class="product-logo">Novadex</div>
     <label class="global-search" aria-label="Snabbsök">
       <input type="search" placeholder="Snabbsök...">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.3-4.3M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"></path></svg>
+      <i class="ti ti-search" aria-hidden="true"></i>
     </label>
     <a class="trial-link" href="#" aria-label="Testkonto" data-action="trial">Klicka här för ett testkonto</a>
     <button class="cloud-status" id="cloud-status" data-top-action="cloud" type="button">Moln: lokal</button>
     <div class="topbar-icons" aria-label="Snabbknappar">
       <button class="top-timer-button" id="global-timer-button" data-top-action="timer" type="button" title="Tidsklocka" aria-label="Tidsklocka">
-        <svg viewBox="0 0 24 24"><path d="M12 6v6l4 2M9 2h6M12 22a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"></path></svg>
+        <i class="ti ti-clock-hour-4" aria-hidden="true"></i>
         <span id="global-timer-readout">00:00:00</span>
       </button>
-      <button class="top-icon" data-top-action="info" type="button" title="Information" aria-label="Information"><svg viewBox="0 0 24 24"><path d="M12 17v-6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"></path></svg></button>
-      <button class="top-icon" data-top-action="notifications" type="button" title="Aviseringar" aria-label="Aviseringar"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"></path></svg></button>
-      <button class="top-icon" data-top-action="help" type="button" title="Hjälp" aria-label="Hjälp"><svg viewBox="0 0 24 24"><path d="M9.2 9a3 3 0 1 1 4.9 2.3c-.9.6-1.6 1.2-1.6 2.7M12 17h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"></path></svg></button>
-      <button class="top-icon" data-top-action="settings" type="button" title="Inställningar" aria-label="Inställningar"><svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1-1.9 3.2-.2-.1a1.7 1.7 0 0 0-1.9.1 7 7 0 0 1-1.5.9 1.7 1.7 0 0 0-1 1.5v.2H9.6v-.2a1.7 1.7 0 0 0-1-1.5 7 7 0 0 1-1.5-.9 1.7 1.7 0 0 0-1.9-.1l-.2.1-1.9-3.2.1-.1a1.7 1.7 0 0 0 .3-1.8 7.3 7.3 0 0 1 0-1.8 1.7 1.7 0 0 0-.3-1.8l-.1-.1L5 8.1l.2.1a1.7 1.7 0 0 0 1.9-.1c.5-.4 1-.7 1.5-.9a1.7 1.7 0 0 0 1-1.5v-.2h4.8v.2a1.7 1.7 0 0 0 1 1.5c.5.2 1 .5 1.5.9a1.7 1.7 0 0 0 1.9.1l.2-.1 1.9 3.2-.1.1a1.7 1.7 0 0 0-.3 1.8c.1.6.1 1.2 0 1.8Z"></path></svg></button>
+      <button class="top-icon" data-top-action="info" type="button" title="Information" aria-label="Information"><i class="ti ti-info-circle" aria-hidden="true"></i></button>
+      <button class="top-icon" data-top-action="notifications" type="button" title="Aviseringar" aria-label="Aviseringar"><i class="ti ti-bell" aria-hidden="true"></i></button>
+      <button class="top-icon" data-top-action="help" type="button" title="Hjälp" aria-label="Hjälp"><i class="ti ti-help-circle" aria-hidden="true"></i></button>
+      <button class="top-icon" data-top-action="settings" type="button" title="Inställningar" aria-label="Inställningar"><i class="ti ti-settings" aria-hidden="true"></i></button>
     </div>
     <label class="role-switcher" aria-label="Roll">
       <span>Roll</span>
@@ -43,61 +44,109 @@
       <nav class="nav-list" aria-label="Vyer">
         <button class="nav-item active" data-view="dashboard" type="button">
           <span class="icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M3 11 12 4l9 7M5 10v10h14V10"></path></svg>
+            <i class="ti ti-home"></i>
           </span>
           <span>Start</span>
         </button>
-        <button class="nav-item" data-view="tasks" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 11 2 2 4-4M5 4h14v16H5z"></path></svg></span>
-          <span>Uppgifter</span>
-        </button>
-        <button class="nav-item" data-view="clients" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-8 0M4 21a8 8 0 0 1 16 0M19 8h2M20 7v2"></path></svg></span>
-          <span>Kontakter</span>
-        </button>
-        <button class="nav-item" data-view="sales" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M17 7.5a4 4 0 0 0-5-2.4c-2.4.8-2.7 3.9-.4 4.8l1.8.7c2.7 1 2.1 4.9-.7 5.4A4.7 4.7 0 0 1 7 13.8"></path></svg></span>
-          <span>Affärsmöjligheter</span>
-        </button>
-        <button class="nav-item" data-view="projects" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"></path></svg></span>
-          <span>Projekt</span>
-        </button>
+        <div class="nav-group" data-nav-group="tasks">
+          <button class="nav-item" data-view="tasks" type="button">
+            <span class="icon" aria-hidden="true"><i class="ti ti-square-check"></i></span>
+            <span>Uppgifter</span>
+            <span class="nav-chevron" aria-hidden="true"><i class="ti ti-chevron-down"></i></span>
+          </button>
+          <div class="nav-submenu">
+            <button data-view-shortcut="tasks" type="button">Mina uppgifter</button>
+            <button data-view-shortcut="reports" type="button">Attestflöde</button>
+          </div>
+        </div>
+        <div class="nav-group" data-nav-group="clients">
+          <button class="nav-item" data-view="clients" type="button">
+            <span class="icon" aria-hidden="true"><i class="ti ti-address-book"></i></span>
+            <span>Kontakter</span>
+            <span class="nav-chevron" aria-hidden="true"><i class="ti ti-chevron-down"></i></span>
+          </button>
+          <div class="nav-submenu">
+            <button data-view-shortcut="clients" type="button">Alla kontakter</button>
+            <button data-view-shortcut="portal" type="button">Kundportal</button>
+          </div>
+        </div>
+        <div class="nav-group" data-nav-group="sales">
+          <button class="nav-item" data-view="sales" type="button">
+            <span class="icon" aria-hidden="true"><i class="ti ti-coin"></i></span>
+            <span>Affärsmöjligheter</span>
+            <span class="nav-chevron" aria-hidden="true"><i class="ti ti-chevron-down"></i></span>
+          </button>
+          <div class="nav-submenu">
+            <button data-view-shortcut="sales" type="button">Översikt</button>
+            <button data-view-shortcut="agreements" type="button">Offerter</button>
+            <button data-view-shortcut="clients" type="button">Stängda affärer</button>
+          </div>
+        </div>
+        <div class="nav-group" data-nav-group="projects">
+          <button class="nav-item" data-view="projects" type="button">
+            <span class="icon" aria-hidden="true"><i class="ti ti-layout-list"></i></span>
+            <span>Projekt</span>
+            <span class="nav-chevron" aria-hidden="true"><i class="ti ti-chevron-down"></i></span>
+          </button>
+          <div class="nav-submenu">
+            <button data-view-shortcut="projects" type="button">Projektlista</button>
+            <button data-view-shortcut="planning" type="button">Resursplanering</button>
+          </div>
+        </div>
         <button class="nav-item" data-view="agreements" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7zM15 3v5h5M10 13h6M10 17h6"></path></svg></span>
+          <span class="icon" aria-hidden="true"><i class="ti ti-archive"></i></span>
           <span>Avtal</span>
         </button>
         <button class="nav-item" data-view="esign" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20h16M5 16l4 2 9-9-4-4-9 9v2Z"></path></svg></span>
+          <span class="icon" aria-hidden="true"><i class="ti ti-signature"></i></span>
           <span>E-signeringar</span>
         </button>
-        <button class="nav-item" data-view="time" type="button">
-          <span class="icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 6v6l4 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"></path></svg>
-          </span>
-          <span>Tid & kvitton</span>
-        </button>
+        <div class="nav-group" data-nav-group="time">
+          <button class="nav-item" data-view="time" type="button">
+            <span class="icon" aria-hidden="true">
+              <i class="ti ti-clock"></i>
+            </span>
+            <span>Tid & kvitton</span>
+            <span class="nav-chevron" aria-hidden="true"><i class="ti ti-chevron-down"></i></span>
+          </button>
+          <div class="nav-submenu">
+            <button data-view-shortcut="time" type="button">Tidsrapportering</button>
+            <button data-view-shortcut="time" data-scroll-target="time-extras" type="button">Kvitton & resor</button>
+            <button data-view-shortcut="time" data-scroll-target="monthly-register" type="button">Månadsregistrering</button>
+          </div>
+        </div>
         <button class="nav-item" data-view="planning" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V5M9 19V9M14 19v-6M19 19V7"></path></svg></span>
+          <span class="icon" aria-hidden="true"><i class="ti ti-calendar"></i></span>
           <span>Resursplanering</span>
         </button>
-        <button class="nav-item" data-view="invoice" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h10v18l-2-1-2 1-2-1-2 1-2-1V3ZM10 8h4M10 12h4M10 16h2"></path></svg></span>
-          <span>Fakturering</span>
-        </button>
+        <div class="nav-group" data-nav-group="invoice">
+          <button class="nav-item" data-view="invoice" type="button">
+            <span class="icon" aria-hidden="true"><i class="ti ti-file-invoice"></i></span>
+            <span>Fakturering</span>
+            <span class="nav-chevron" aria-hidden="true"><i class="ti ti-chevron-down"></i></span>
+          </button>
+          <div class="nav-submenu">
+            <button data-view-shortcut="invoice" type="button">Att fakturera</button>
+            <button data-view-shortcut="invoice" data-scroll-target="invoice-history" type="button">Fakturahistorik</button>
+          </div>
+        </div>
         <button class="nav-item" data-view="reports" type="button">
           <span class="icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M4 19h16M7 16V9m5 7V5m5 11v-4"></path></svg>
+            <i class="ti ti-chart-bar"></i>
           </span>
           <span>Rapporter</span>
         </button>
         <button class="nav-item" data-view="analysis" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 19h18M7 16l3-4 3 2 4-7"></path></svg></span>
+          <span class="icon" aria-hidden="true"><i class="ti ti-chart-histogram"></i></span>
           <span>Analys</span>
         </button>
-        <button class="nav-item" data-view="portal" type="button">
-          <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 12a4 4 0 1 1 8 0M4 21a8 8 0 0 1 16 0M3 8h4M17 8h4"></path></svg></span>
-          <span>Kundportal</span>
+        <button class="nav-item" data-view="collaboration" type="button">
+          <span class="icon" aria-hidden="true"><i class="ti ti-share"></i></span>
+          <span>Samarbete</span>
+        </button>
+        <button class="nav-item" data-view="versions" type="button">
+          <span class="icon" aria-hidden="true"><i class="ti ti-layers-intersect"></i></span>
+          <span>Testa olika versioner</span>
         </button>
       </nav>
 
@@ -115,10 +164,10 @@
         </div>
         <div class="top-actions">
           <button class="icon-button" id="export-csv" type="button" title="Exportera CSV" aria-label="Exportera CSV">
-            <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"></path></svg>
+            <i class="ti ti-download" aria-hidden="true"></i>
           </button>
           <button class="primary-button" data-view-shortcut="time" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+            <i class="ti ti-plus" aria-hidden="true"></i>
             Ny registrering
           </button>
         </div>
@@ -134,9 +183,9 @@
                 </div>
               </div>
               <div class="month-switcher">
-                <button class="mini-button" id="calendar-prev" type="button" aria-label="Föregående månad"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg></button>
+                <button class="mini-button" id="calendar-prev" type="button" aria-label="Föregående månad"><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
                 <strong id="calendar-month">Maj 2026</strong>
-                <button class="mini-button" id="calendar-next" type="button" aria-label="Nästa månad"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg></button>
+                <button class="mini-button" id="calendar-next" type="button" aria-label="Nästa månad"><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
               </div>
               <div class="calendar-grid" id="calendar-grid"></div>
               <div class="planning-summary">
@@ -182,7 +231,7 @@
             <section class="panel shortcut-panel">
               <div class="section-heading compact-heading">
                 <h2>Genvägar</h2>
-                <button class="mini-button" data-action="add-shortcut" type="button" aria-label="Lägg till genväg"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg></button>
+                <button class="mini-button" data-action="add-shortcut" type="button" aria-label="Lägg till genväg"><i class="ti ti-plus" aria-hidden="true"></i></button>
               </div>
               <div class="shortcut-list" id="shortcut-list">
                 <button data-view-shortcut="time" type="button">Tidsregistrering</button>
@@ -199,7 +248,7 @@
                 <button class="tab" data-news-tab="news" type="button">Nyhet</button>
               </div>
               <div class="news-actions">
-                <button class="mini-button" data-action="news-search" type="button" aria-label="Sök"><svg viewBox="0 0 24 24"><path d="m21 21-4.3-4.3M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"></path></svg></button>
+                <button class="mini-button" data-action="news-search" type="button" aria-label="Sök"><i class="ti ti-search" aria-hidden="true"></i></button>
                 <button class="ghost-button small-button" data-action="news-archive" type="button">Arkiv</button>
                 <button class="primary-button small-button" data-action="news-create" type="button">Nytt inlägg</button>
               </div>
@@ -213,8 +262,8 @@
                 <span class="badge approved">Nyhet</span>
               </div>
               <div class="welcome-visual" aria-hidden="true">
-                <div class="visual-card check-card"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"></path></svg></div>
-                <div class="visual-card time-card"><svg viewBox="0 0 24 24"><path d="M12 6v6l4 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"></path></svg></div>
+                <div class="visual-card check-card"><i class="ti ti-check" aria-hidden="true"></i></div>
+                <div class="visual-card time-card"><i class="ti ti-clock-hour-4" aria-hidden="true"></i></div>
                 <div class="visual-copy">
                   <strong>Rätt tid. Rätt underlag.</strong>
                   <span>Från registrering till attest, lön och faktura.</span>
@@ -226,8 +275,8 @@
               </div>
               <div class="chart-list" id="client-chart"></div>
               <div class="post-footer">
-                <button class="mini-button" data-action="like-news" type="button" aria-label="Gilla"><svg viewBox="0 0 24 24"><path d="M7 11v10H4V11h3Zm4 10h6.3a2 2 0 0 0 2-1.7l.8-6A2 2 0 0 0 18 11h-4l.7-3.4A2 2 0 0 0 12.8 5h-.3L9 11v10h2Z"></path></svg></button>
-                <button class="mini-button" data-action="comment-news" type="button" aria-label="Kommentera"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H5l2.4-3.2A8 8 0 1 1 21 12Z"></path></svg></button>
+                <button class="mini-button" data-action="like-news" type="button" aria-label="Gilla"><i class="ti ti-thumb-up" aria-hidden="true"></i></button>
+                <button class="mini-button" data-action="comment-news" type="button" aria-label="Kommentera"><i class="ti ti-message-circle" aria-hidden="true"></i></button>
                 <span id="news-reactions">0 gillar · 0 kommentarer</span>
               </div>
             </article>
@@ -247,7 +296,7 @@
 
             <section class="panel signal-panel">
               <div class="signal-heading">
-                <svg viewBox="0 0 24 24"><path d="M4 5h14l-1 5 1 5H4z"></path></svg>
+                <i class="ti ti-flag" aria-hidden="true"></i>
                 <h2>Aviseringar</h2>
               </div>
               <div class="notice-card">
@@ -259,7 +308,7 @@
 
             <section class="panel signal-panel">
               <div class="signal-heading">
-                <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path></svg>
+                <i class="ti ti-bell" aria-hidden="true"></i>
                 <h2>Åtgärder</h2>
               </div>
               <p class="muted-line"><span id="pending-count">0</span> tidsrader väntar på attest.</p>
@@ -267,7 +316,7 @@
 
             <section class="panel signal-panel">
               <div class="signal-heading">
-                <svg viewBox="0 0 24 24"><path d="M6 3h12M8 3v5l4 4-4 4v5h8v-5l-4-4 4-4V3"></path></svg>
+                <i class="ti ti-hourglass" aria-hidden="true"></i>
                 <h2>Kommande</h2>
               </div>
               <p class="muted-line">Allt är under kontroll, inget kommande i närtid.</p>
@@ -417,18 +466,46 @@
           </div>
         </section>
 
-        <section class="panel monthly-register-panel">
+        <section class="panel monthly-register-panel" id="monthly-register">
           <div class="section-heading">
             <div>
               <p class="eyebrow">Månadsregistrering</p>
               <h2>Rapporterat, schema, avvikelse och debiterbart</h2>
             </div>
             <div class="top-actions">
+              <button class="ghost-button small-button" id="time-prev-period" type="button">Föregående</button>
+              <button class="ghost-button small-button" id="time-today-period" type="button">Idag</button>
+              <button class="ghost-button small-button" id="time-next-period" type="button">Nästa</button>
               <button class="ghost-button small-button" id="time-expand-blocks" type="button">Expandera tidsblock</button>
+              <button class="ghost-button small-button" id="time-submit-period" type="button">Skicka period</button>
+              <button class="ghost-button small-button" id="time-lock-period" type="button">Lås månad</button>
               <button class="primary-button small-button" id="time-attest-month" type="button">Attestera månad</button>
             </div>
           </div>
           <div class="client-detail-metrics portal-metrics" id="time-period-summary"></div>
+          <div class="time-status-summary" id="time-status-summary"></div>
+          <div class="month-register-layout">
+            <div class="table-wrap">
+              <table class="month-day-table">
+                <thead>
+                  <tr>
+                    <th>Dag</th>
+                    <th>Tidsblock</th>
+                    <th>RAPP</th>
+                    <th>FRV</th>
+                    <th>SCH</th>
+                    <th>AVV</th>
+                    <th>DEB</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="month-day-board"></tbody>
+              </table>
+            </div>
+            <aside class="month-register-aside" id="month-register-aside"></aside>
+          </div>
+          <h3 class="subsection-title">Medarbetaröversikt</h3>
           <div class="table-wrap">
             <table class="period-table">
               <thead>
@@ -459,6 +536,10 @@
             </div>
 
             <div class="timer-display" id="timer-display">00:00:00</div>
+            <div class="timer-live-meta" id="timer-live-meta">
+              <strong>Ingen aktiv timer</strong>
+              <span>Välj kund, projekt och aktivitet innan du startar.</span>
+            </div>
 
             <form class="timer-form" id="timer-form">
               <label>
@@ -504,15 +585,19 @@
 
             <div class="timer-actions">
               <button class="primary-button" id="start-timer" type="button">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"></path></svg>
+                <i class="ti ti-player-play" aria-hidden="true"></i>
                 Starta
               </button>
               <button class="ghost-button" id="copy-last-entry" type="button">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h10v10H8zM6 16H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path></svg>
+                <i class="ti ti-copy" aria-hidden="true"></i>
                 Kopiera föregående
               </button>
+              <button class="ghost-button" id="pause-timer" type="button" disabled>
+                <i class="ti ti-player-pause" aria-hidden="true"></i>
+                Pausa
+              </button>
               <button class="ghost-button" id="stop-timer" type="button" disabled>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z"></path></svg>
+                <i class="ti ti-player-stop" aria-hidden="true"></i>
                 Spara
               </button>
             </div>
@@ -596,7 +681,7 @@
                 <input id="entry-description" type="text" placeholder="Kort notering till fakturaunderlag">
               </label>
               <button class="primary-button full-span" type="submit">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+                <i class="ti ti-plus" aria-hidden="true"></i>
                 Lägg till tidsrad
               </button>
             </form>
@@ -643,7 +728,7 @@
           </div>
         </section>
 
-        <div class="time-extras-layout">
+        <div class="time-extras-layout" id="time-extras">
           <section class="panel">
             <div class="section-heading">
               <div>
@@ -807,7 +892,7 @@
                 <input id="client-rate" type="number" min="0" step="50" value="950">
               </label>
               <button class="primary-button" type="submit">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+                <i class="ti ti-plus" aria-hidden="true"></i>
                 Lägg till kund
               </button>
             </form>
@@ -1116,19 +1201,29 @@
               <span class="filter-label">Visningsläge</span>
               <div class="round-toggle" aria-label="Visningsläge">
                 <button class="active" type="button" data-invoice-viewmode="project" title="Projekt">
-                  <svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"></path></svg>
+                  <i class="ti ti-layout-list" aria-hidden="true"></i>
                 </button>
                 <button type="button" data-invoice-viewmode="client" title="Kund">
-                  <svg viewBox="0 0 24 24"><path d="M16 11a4 4 0 1 0-8 0M4 21a8 8 0 0 1 16 0"></path></svg>
+                  <i class="ti ti-address-book" aria-hidden="true"></i>
                 </button>
                 <button type="button" data-invoice-viewmode="collection" title="Samlingsprojekt">
-                  <svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"></path></svg>
+                  <i class="ti ti-list-details" aria-hidden="true"></i>
                 </button>
               </div>
             </div>
             <label>
               Sök
               <input id="invoice-search" type="search" placeholder="Sök">
+            </label>
+            <label>
+              Status
+              <select id="invoice-readiness-filter">
+                <option value="all">Alla underlag</option>
+                <option value="ready">Klara</option>
+                <option value="blocked">Behöver attest</option>
+                <option value="customer">Kunddata saknas</option>
+                <option value="empty">Utan belopp</option>
+              </select>
             </label>
             <div class="date-range">
               <label>
@@ -1142,12 +1237,14 @@
               </label>
             </div>
             <button class="ghost-button invoice-filter-button" id="invoice-filter-button" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z"></path></svg>
+              <i class="ti ti-filter" aria-hidden="true"></i>
               Filtrera
             </button>
+            <button class="ghost-button invoice-filter-button" id="invoice-reset-filter" type="button">Rensa</button>
           </div>
 
           <div class="invoice-command-strip" id="invoice-command-strip"></div>
+          <div class="invoice-status-summary" id="invoice-status-summary"></div>
 
           <div class="table-wrap">
             <table class="invoice-table">
@@ -1175,12 +1272,41 @@
             <span>Sista</span>
           </div>
 
-          <section class="invoice-history-section">
+          <section class="invoice-history-section" id="invoice-history">
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Historik</p>
                 <h2>Skapade fakturor</h2>
               </div>
+            </div>
+            <div class="invoice-history-summary" id="invoice-history-summary"></div>
+            <div class="invoice-history-toolbar">
+              <label>
+                Sök faktura
+                <input id="invoice-history-search" type="search" placeholder="Fakturanummer, kund eller projekt">
+              </label>
+              <label>
+                Status
+                <select id="invoice-history-status">
+                  <option value="all">Alla statusar</option>
+                  <option value="open">Öppna</option>
+                  <option value="created">Skapad</option>
+                  <option value="sent">Skickad</option>
+                  <option value="overdue">Förfallen</option>
+                  <option value="customerApproved">Godkänd av kund</option>
+                  <option value="changeRequested">Ändring begärd</option>
+                  <option value="paid">Betald</option>
+                  <option value="credited">Krediterad</option>
+                  <option value="reopened">Återöppnad</option>
+                </select>
+              </label>
+              <label>
+                Kund
+                <select id="invoice-history-client">
+                  <option value="all">Alla kunder</option>
+                </select>
+              </label>
+              <button class="ghost-button small-button" id="invoice-history-reset" type="button">Rensa historikfilter</button>
             </div>
             <div class="table-wrap">
               <table class="invoice-table">
@@ -1275,6 +1401,67 @@
         </div>
       </section>
 
+      <section class="view" id="collaboration-view" aria-labelledby="page-title">
+        <section class="panel system-page collaboration-command">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Samarbete</p>
+              <h2>Interna trådar, kunddialog och delade underlag</h2>
+            </div>
+            <div class="top-actions">
+              <button class="ghost-button small-button" id="collaboration-copy-link" type="button">Kopiera länk</button>
+              <button class="primary-button small-button" id="collaboration-new-thread" type="button">Ny tråd</button>
+            </div>
+          </div>
+          <div class="client-detail-metrics portal-metrics" id="collaboration-summary"></div>
+        </section>
+
+        <div class="report-layout collaboration-layout">
+          <section class="panel wide-panel">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="eyebrow">Flöde</p>
+                <h2>Aktiva samarbetsytor</h2>
+              </div>
+            </div>
+            <div class="activity-list workflow-list" id="collaboration-feed"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="eyebrow">Delning</p>
+                <h2>Kundportal och behörighet</h2>
+              </div>
+            </div>
+            <div class="employee-list" id="collaboration-permissions"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="versions-view" aria-labelledby="page-title">
+        <section class="panel system-page versions-command">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Testa olika versioner</p>
+              <h2>Funktionslägen, designval och experiment</h2>
+            </div>
+            <button class="primary-button small-button" id="versions-apply-recommended" type="button">Aktivera rekommenderat</button>
+          </div>
+          <div class="client-detail-metrics portal-metrics" id="versions-summary"></div>
+        </section>
+
+        <section class="panel wide-panel">
+          <div class="section-heading compact-heading">
+            <div>
+              <p class="eyebrow">Versioner</p>
+              <h2>Valbara arbetslägen</h2>
+            </div>
+          </div>
+          <div class="analysis-grid version-grid" id="version-grid"></div>
+        </section>
+      </section>
+
       <section class="view" id="reports-view" aria-labelledby="page-title">
         <section class="panel report-catalog-panel">
           <div class="section-heading">
@@ -1292,7 +1479,20 @@
         </section>
 
         <div class="report-layout">
-          <section class="panel wide-panel admin-overview-panel">
+          <section class="panel wide-panel report-detail-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Rapport</p>
+                <h2 id="report-detail-title">Rapportdetalj</h2>
+              </div>
+              <div class="top-actions" id="report-detail-actions"></div>
+            </div>
+            <p class="panel-copy" id="report-detail-description"></p>
+            <div class="client-detail-metrics portal-metrics report-detail-metrics" id="report-detail-metrics"></div>
+            <div class="report-result-list" id="report-result-list"></div>
+          </section>
+
+          <section class="panel wide-panel admin-overview-panel" id="admin-overview">
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Admin</p>
@@ -1386,6 +1586,18 @@
                 <input id="approval-search" type="search" placeholder="Sök medarbetare, kund, projekt eller nummer">
               </label>
               <label>
+                Rapportör / ansvarig
+                <select id="approval-owner-filter">
+                  <option value="all">Alla</option>
+                </select>
+              </label>
+              <label>
+                Projekt
+                <select id="approval-project-filter">
+                  <option value="all">Alla projekt</option>
+                </select>
+              </label>
+              <label>
                 Typ
                 <select id="approval-kind-filter">
                   <option value="all">Alla typer</option>
@@ -1408,11 +1620,25 @@
                   <option value="all">Alla</option>
                 </select>
               </label>
+              <label>
+                Från datum
+                <input id="approval-from" type="date">
+              </label>
+              <label>
+                Till datum
+                <input id="approval-to" type="date">
+              </label>
               <label class="checkbox-line">
                 <input id="approval-select-all" type="checkbox">
                 Markera synliga
               </label>
+              <label class="checkbox-line">
+                <input id="approval-actionable-only" type="checkbox">
+                Dölj utan åtgärd
+              </label>
+              <button class="ghost-button small-button" id="approval-reset-filters" type="button">Rensa filter</button>
             </div>
+            <div class="approval-group-summary" id="approval-group-summary"></div>
             <div class="activity-list" id="approval-list"></div>
           </section>
         </div>
@@ -1429,7 +1655,7 @@
           <h2 id="drawer-title">Detaljer</h2>
         </div>
         <button class="mini-button" type="button" data-drawer-close aria-label="Stäng panel">
-          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+          <i class="ti ti-x" aria-hidden="true"></i>
         </button>
       </header>
       <div class="drawer-body" id="drawer-body"></div>
@@ -1438,14 +1664,14 @@
 
   <template id="empty-template">
     <div class="empty-state">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>
+      <i class="ti ti-list-search" aria-hidden="true"></i>
       <span>Inga poster hittades</span>
     </div>
   </template>
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="supabase-config.js"></script>
-  <script src="app.js"></script>
+  <script src="supabase-config.js?v=20260619-time-invoice-flow"></script>
+  <script src="app.js?v=20260619-time-invoice-flow"></script>
 </body>
 </html>
